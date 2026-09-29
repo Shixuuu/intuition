@@ -57,7 +57,7 @@ def _char_budget(store, section: str, key: str, default: int) -> int:
 
 
 def observations_tail(store, max_chars: int) -> str:
-    """Last ~7 days of the observation log, within *max_chars* (plan §5.1)."""
+    """The tail of this month's observation log, within *max_chars* (plan §5.1)."""
     import time
     text = store.read_text(f"observations/{time.strftime('%Y-%m')}.md")
     if not text:

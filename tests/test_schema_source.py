@@ -22,6 +22,23 @@ def test_schema_source_covers_every_tool_once():
         assert spec["parameters"].get("type") == "object", name
 
 
+def test_every_schema_property_declares_a_type():
+    """A provider rejects a property that only carries an enum: Moonshot's
+    validator needs `type` on every property, and a real Pi session failed on it."""
+    def walk(node, path):
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "object" or "properties" in node:
+            for name, prop in (node.get("properties") or {}).items():
+                assert "type" in prop or "anyOf" in prop, f"{path}.{name} has no type"
+                walk(prop, f"{path}.{name}")
+        if node.get("type") == "array":
+            walk(node.get("items"), f"{path}[]")
+
+    for name, spec in MEMORY_TOOL_SCHEMAS.items():
+        walk(spec["parameters"], name)
+
+
 def test_roles_get_the_tools_they_may_call():
     assert {s["name"] for s in schemas_for("subagent")} == {"memory_search", "memory_read"}
     assert [s["name"] for s in schemas_for("main")] == list(TOOL_ORDER)

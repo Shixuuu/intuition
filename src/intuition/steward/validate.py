@@ -18,38 +18,83 @@ from . import ops as ops_mod
 
 _URL_RE = re.compile(r"^url:")
 EXTERNAL = "external"
-# Ops that would put text in front of a future agent as an instruction.
+# Ops that may only be backed by the user or the main assistant.
+AUTHORED_OPS = ("procedure_add", "decision_propose", "set_prose", "add_alias",
+                "link", "observe", "correct", "remove_fact", "close_fact")
+# The only shapes external content may take, both carrying the external trust tag.
+EXTERNAL_OPS = ("add_fact", "create")
+# Kinds that become durable instruction or profile text.
+PROTECTED_KINDS = ("preference", "decision", "procedure")
+# Ops carrying text that a future agent reads as an instruction.
 INSTRUCTION_OPS = ("procedure_add", "decision_propose")
-# Ops carrying user intent that only a person or the main assistant may author.
-PRIVILEGED_KINDS = ("preference", "decision")
 APPLY_OPS = tuple(n for n in ops_mod.PLAN_OPS if n not in ("noop", "reject"))
 
 
-def external_citations(op: dict, batch_index: dict[str, dict]) -> list[tuple[str, dict]]:
-    """``(source token, item)`` for every cited inbox item that came from outside.
+def citation_trust(op: dict, batch_index: dict[str, dict]) -> str:
+    """What the op's cited inbox items say about where this came from.
 
-    Only these carry the trust restriction: a proposal the user or the main
-    assistant authored may create preferences, decisions, and procedures.
+    ``external`` when any cited item is external, ``local`` when at least one is
+    user- or agent-authored, ``none`` when the op cites no inbox item at all. The
+    cited item decides: an op's own ``source`` field is a claim by whoever wrote
+    the plan, including a model.
     """
-    return [(str(s), batch_index[str(s)])
-            for s in op.get("sources", [])
+    cited = [batch_index[str(s)] for s in op.get("sources", []) if str(s) in batch_index]
+    if not cited:
+        return "none"
+    if any(item.get("source") == EXTERNAL for item in cited):
+        return EXTERNAL
+    return "local"
+
+
+def external_citations(op: dict, batch_index: dict[str, dict]) -> list[tuple[str, dict]]:
+    """``(source token, item)`` for every cited inbox item that came from outside."""
+    return [(str(s), batch_index[str(s)]) for s in op.get("sources", [])
             if str(s) in batch_index and batch_index[str(s)].get("source") == EXTERNAL]
 
 
-def external_rejection(name: str, op: dict, item: dict) -> str | None:
+def protected_kind(op: dict) -> str | None:
+    """The protected kind this op claims through ``kind`` or a record ``type``."""
+    for field in ("kind", "type"):
+        value = str(op.get(field, "")).casefold()
+        if value in PROTECTED_KINDS:
+            return value
+    return None
+
+
+def needs_local_citation(name: str, op: dict) -> bool:
+    return name in AUTHORED_OPS or protected_kind(op) is not None
+
+
+def text_is_cited(op: dict, batch_index: dict[str, dict]) -> bool:
+    """True when the op's text appears in one of the items it cites."""
+    text = str(op.get("text", "")).strip().casefold()
+    if not text:
+        return False
+    for _token, item in cited_items(op, batch_index):
+        pool = f"{item.get('text', '')} {item.get('evidence', '')}".casefold()
+        if text in pool:
+            return True
+    return False
+
+
+def cited_items(op: dict, batch_index: dict[str, dict]) -> list[tuple[str, dict]]:
+    """``(source token, item)`` for every inbox item the op cites."""
+    return [(str(s), batch_index[str(s)]) for s in op.get("sources", [])
+            if str(s) in batch_index]
+
+
+def external_rejection(name: str, op: dict, item: dict | None = None) -> str | None:
     """Why external content may not back this op, or None when it may."""
-    if name in INSTRUCTION_OPS:
-        return "may not create a procedure or a decision"
-    if name in ("create", "add_fact", "correct"):
-        kind = str(op.get("kind", ""))
-        rtype = str(op.get("type", ""))
-        if kind in PRIVILEGED_KINDS or rtype in PRIVILEGED_KINDS:
-            return "may not create a preference or a decision"
-    if op.get("trust") == "stated":
-        return "may not be recorded as stated"
+    if name not in EXTERNAL_OPS:
+        return "may only add a fact or a new record"
+    kind = protected_kind(op)
+    if kind is not None:
+        return f"may not create a {kind}"
+    if str(op.get("trust", "")).casefold() != EXTERNAL:
+        return "enters as #external only"
     spoken = " ".join(str(x) for x in (
-        item.get("text", ""), item.get("evidence", ""), op.get("text", ""),
-        op.get("evidence", "")))
+        op.get("text", ""), op.get("evidence", ""),
+        (item or {}).get("text", ""), (item or {}).get("evidence", "")))
     if is_imperative(spoken):
         return "hits the imperative filter"
     return None
@@ -110,10 +155,19 @@ def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> lis
 
         # Trust gate: the cited inbox item decides, whatever the plan declared.
         # Every reason here names its item, so the pass can dispose exactly it.
-        for token, item in external_citations(op, batch_index):
-            why = external_rejection(name, op, item)
-            if why:
-                reasons.append(f"trust: {tag} cited {token} is external and {why}")
+        trust = citation_trust(op, batch_index)
+        if trust == EXTERNAL:
+            for token, item in external_citations(op, batch_index):
+                why = external_rejection(name, op, item)
+                if why:
+                    reasons.append(f"trust: {tag} cited {token} is external and {why}")
+        elif needs_local_citation(name, op):
+            if trust != "local":
+                reasons.append(
+                    f"trust: {tag} needs a citation from the user or the main assistant")
+            elif (name in INSTRUCTION_OPS or protected_kind(op)) and \
+                    not text_is_cited(op, batch_index):
+                reasons.append(f"evidence: {tag} text is not in the cited item")
 
         # Id rules
         if name == "create" and op.get("id") in recs:

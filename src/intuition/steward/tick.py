@@ -14,7 +14,14 @@ import time
 from ..model import parse_iso_ts
 from .deep import deep_pass
 from .light import light_pass
-from .state import LAST_ACTIVITY, LAST_DEEP, LAST_DEEP_DAY, State, pending_raw_bytes
+from .state import (
+    LAST_ACTIVITY,
+    LAST_DEEP,
+    LAST_DEEP_DAY,
+    State,
+    newest_raw_mtime,
+    pending_raw_bytes,
+)
 
 STEWARDSHIP_LOCK = "steward"
 
@@ -92,7 +99,12 @@ def tick(store, index, *, light: bool = False, deep: bool = False,
 # -- helpers ------------------------------------------------------------------------
 
 def _idle_minutes(store) -> float:
-    last = State(store).time_of(LAST_ACTIVITY)
+    """Quiet minutes: the last pass, or the newest raw capture, whichever is later.
+
+    Raw written between passes counts as activity even though the state file is
+    only touched at the end of a pass, so idle cannot fire mid-session.
+    """
+    last = max(State(store).time_of(LAST_ACTIVITY), newest_raw_mtime(store))
     if not last:
         return 0.0
     return (time.time() - last) / 60.0

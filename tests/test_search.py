@@ -106,6 +106,48 @@ updated: 2026-09-01
     assert len(hits) <= int(store.section("search", "max_records", 4))
 
 
+def test_memory_tools_work_from_a_host_thread(store, index):
+    """A host dispatches memory tool calls on its own worker threads, while the
+    query connection was built on the caller's. Includes a type-filtered query,
+    which reads the record types through the same connection."""
+    import threading
+
+    from intuition.tools import handle_tool_call
+
+    outcomes: list = []
+    errors: list = []
+
+    def search(query, **extra):
+        try:
+            outcomes.append(handle_tool_call(
+                store, index, "memory_search", {"queries": [query], **extra}))
+        except Exception as exc:                 # noqa: BLE001 - reported below
+            errors.append(repr(exc))
+
+    def read():
+        try:
+            outcomes.append(handle_tool_call(
+                store, index, "memory_read", {"id_or_name": "pers-june"}))
+        except Exception as exc:                 # noqa: BLE001 - reported below
+            errors.append(repr(exc))
+
+    workers = [
+        threading.Thread(target=search, args=("who is the pm for lighthouse",)),
+        threading.Thread(target=search, args=("june lighthouse",), kwargs={"type": "person"}),
+        threading.Thread(target=read),
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+
+    assert not errors, errors
+    assert any(r["id"] == "pers-june"
+               for outcome in outcomes for r in outcome.get("records", []))
+    assert any(outcome.get("id") == "pers-june" for outcome in outcomes)
+    index.record_usage("pers-june")               # write path from this thread too
+
+
 def test_retrieval_eval_gate(store, index):
     """plan §11.2: run the eval file against the sample vault, all cases hit."""
     import tomllib

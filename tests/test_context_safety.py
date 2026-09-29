@@ -146,8 +146,8 @@ def test_parallel_subagents_cannot_conflict(store, index):
 # -- Hermes adapter contract --------------------------------------------------------
 
 def test_hermes_provider_tool_call_json(store, index, monkeypatch):
-    monkeypatch.setattr(hermes_mod.Store, "__init__",
-                        lambda self, path=None: Store_init(self, store), raising=True)
+    # the provider builds its own Store; point that at the fixture's
+    monkeypatch.setattr(hermes_mod, "Store", lambda *a, **k: store)
     p = hermes_mod.IntuitionProvider()
     p.initialize("s-1", agent_context="primary", agent_identity="main")
     raw = p.handle_tool_call("memory_search", {"queries": ["june"]})
@@ -157,19 +157,14 @@ def test_hermes_provider_tool_call_json(store, index, monkeypatch):
     assert all({"name", "description", "parameters"} == set(s) for s in schemas)
     assert p.name == "intuition"
     assert p.pre_compress_checkpoint_api_version == 2
-
-
-def Store_init(self, real):
-    self.root = real.root
-    self.cfg = real.cfg
-    return None
+    p.shutdown()
 
 
 def test_hermes_subagent_context_gets_search_only(store, monkeypatch):
-    monkeypatch.setattr(hermes_mod.Store, "__init__",
-                        lambda self, path=None: Store_init(self, store))
+    monkeypatch.setattr(hermes_mod, "Store", lambda *a, **k: store)
     p = hermes_mod.IntuitionProvider()
     p.initialize("s-2", agent_context="subagent", agent_identity="researcher")
     names = {s["name"] for s in p.get_tool_schemas()}
     assert names == {"memory_search", "memory_read"}
     assert p.system_prompt_block().startswith("## Memory (read-only)")
+    p.shutdown()

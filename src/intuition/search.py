@@ -113,8 +113,7 @@ def _mentioned(text: str, item: dict) -> bool:
 
 
 def _type_of(index, rid: str) -> str:
-    row = index.db.execute("SELECT type FROM docs WHERE id=?", (rid,)).fetchone()
-    return row["type"] if row else ""
+    return index.type_of(rid)
 
 
 def _log_misses(index, queries: list[str], hits: list[Hit]) -> None:

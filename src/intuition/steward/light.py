@@ -174,10 +174,6 @@ def light_pass(store, index, *, reason: str = "") -> dict:
         result["skipped"] = "inbox empty"
         state_mod.touch(store, light=True)
         return result
-    # remember what this run planned, so a session-end pass does not re-plan it
-    _state = state_mod.load(store)
-    _state.record_attempt([item["id"] for item in batch])
-    _state.save()
 
     # 3. candidates: records the batch may touch
     candidates: dict[str, object] = {}
@@ -205,6 +201,12 @@ def light_pass(store, index, *, reason: str = "") -> dict:
         state_mod.touch(store, light=True)
         return result
 
+    # remember what this run planned, so a session-end pass does not re-plan it.
+    # A planner failure above leaves the attempt unrecorded, so it is retried.
+    _state = state_mod.load(store)
+    _state.record_attempt([item["id"] for item in batch])
+    _state.save()
+
     # 5. validate: reject the whole plan, then dispose only the items it named
     reasons = validate_mod.validate_plan(store, plan, batch, candidates)
     if reasons:
@@ -223,6 +225,7 @@ def light_pass(store, index, *, reason: str = "") -> dict:
         return result
 
     # 6–9. apply → validate → archive → one commit; git is the transaction
+    disposed: set[str] = set()
     try:
         touched, notes = ops_mod.apply_plan(store, plan, batch)
         problems = validate_mod.validate_vault(store, touched)
@@ -232,8 +235,8 @@ def light_pass(store, index, *, reason: str = "") -> dict:
         result["unapplied"] = validate_mod.unapplied_items(plan, batch)
         # archive inside the transaction, so the inbox rewrite is part of this
         # commit instead of landing in the next run's hand-edit sweep
-        result["archived"] = inbox_mod.archive(
-            store, validate_mod.planned_ids(plan) | set(result["rejected"]))
+        disposed = validate_mod.planned_ids(plan) | set(result["rejected"])
+        result["archived"] = inbox_mod.archive(store, disposed)
         detail = plan.get("summary", "")
         if notes:
             detail = (detail + "; " if detail else "") + "; ".join(notes[:6])
@@ -245,6 +248,9 @@ def light_pass(store, index, *, reason: str = "") -> dict:
         index.update()
     except Exception as e:
         store.rollback()
+        # the archive step may already have removed proposals from the queue;
+        # a run that applied nothing must not consume them
+        inbox_mod.restore_pending(store, disposed)
         result["error"] = f"apply failed, rolled back: {e}"
         state_mod.touch(store, light=True)
         return result

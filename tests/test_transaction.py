@@ -40,6 +40,12 @@ def test_light_fault_after_apply_leaves_no_phantom_facts(store, index):
     assert "inbox empty" not in result.get("skipped", "")
     assert inbox.read_batch(store), "the batch is still pending"
 
+    # and the next run must still work: a rollback must not remove directories
+    # or leave a pathspec that the next hand-edit sweep cannot stage
+    follow_up = _run(store, index)
+    assert "error" not in follow_up, follow_up.get("error")
+    assert follow_up["committed"], "the retry applies the same proposal"
+
 
 def test_light_fault_keeps_the_process_view_of_the_vault(store, index):
     """The failed plan's mutations must not survive in the record cache."""

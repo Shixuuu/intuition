@@ -12,12 +12,25 @@ WAL mode so readers never block. Deleting .intuition/ is always safe.
 
 from __future__ import annotations
 
+import functools
 import sqlite3
+import threading
 import time
 
 from .model import parse_record
 
 WEIGHTS = "0, 6, 8, 3, 2, 1"    # bm25 weights per column: id 0, name 6, aliases 8, headings 3, facts 2, prose 1
+
+
+def _serialized(method):
+    """One lock per Index. A host can dispatch tool calls from a different thread
+    than the one that built the connection, and sqlite connections are not safe
+    for concurrent use, so every database call goes through the index's lock."""
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._lock:
+            return method(self, *args, **kwargs)
+    return wrapper
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS docs (
@@ -47,14 +60,16 @@ class Index:
         self.store = store
         self.path = store.dir(".intuition/index.sqlite")
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(self.path, timeout=10)
+        self.db = sqlite3.connect(self.path, timeout=10, check_same_thread=False)
+        self._lock = threading.RLock()
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
         self.db.commit()
 
     def close(self) -> None:
-        self.db.close()
+        with self._lock:
+            self.db.close()
 
     # -- build / stale check ------------------------------------------------
 
@@ -65,10 +80,12 @@ class Index:
             latest = max(latest, p.stat().st_mtime)
         return latest
 
+    @_serialized
     def is_stale(self) -> bool:
         row = self.db.execute("SELECT value FROM meta WHERE key='max_mtime'").fetchone()
         return row is None or float(row["value"]) != self.max_mtime()
 
+    @_serialized
     def update(self) -> int:
         """Update changed files only. Returns count of (re)indexed docs."""
         latest = self.max_mtime()
@@ -101,6 +118,7 @@ class Index:
         self.db.commit()
         return changed
 
+    @_serialized
     def reindex(self) -> int:
         for tbl in ("docs_fts", "docs", "links"):
             self.db.execute(f"DELETE FROM {tbl}")
@@ -108,6 +126,7 @@ class Index:
         self.db.commit()
         return self.update()
 
+    @_serialized
     def _index_doc(self, rec, mtime: float) -> None:
         aliases = ", ".join([rec.name, *rec.aliases])
         facts = "\n".join(f.line() for f in rec.facts)
@@ -128,6 +147,7 @@ class Index:
                 "INSERT INTO links(src,dst,relation) VALUES(?,?,?)",
                 (rec.id, link.target, link.rel))
 
+    @_serialized
     def _remove_doc(self, rid: str) -> None:
         self.db.execute("DELETE FROM docs_fts WHERE doc_id=?", (rid,))
         self.db.execute("DELETE FROM docs WHERE id=?", (rid,))
@@ -135,6 +155,7 @@ class Index:
 
     # -- query ----------------------------------------------------------------
 
+    @_serialized
     def fts(self, query: str, limit: int = 10) -> list[tuple[str, float]]:
         """Ranked (id, score) — score is fts5 rank, lower (more negative) = better."""
         q = _fts_query(query)
@@ -150,6 +171,7 @@ class Index:
             return []
         return [(r["id"], r["rank"]) for r in rows]
 
+    @_serialized
     def alias_exact(self, query: str) -> list[str]:
         """Whole-query alias matches — the fixed boost from plan §5.2 step 3."""
         wanted = query.strip().casefold()
@@ -163,14 +185,27 @@ class Index:
                 hits.append(r["id"])
         return hits
 
+    @_serialized
     def neighbours(self, rid: str) -> list[str]:
         rows = self.db.execute(
             "SELECT dst FROM links WHERE src=? UNION "
             "SELECT src FROM links WHERE dst=?", (rid, rid)).fetchall()
         return [r[0] for r in rows if r[0]]
 
+    @_serialized
+    def type_of(self, rid: str) -> str:
+        row = self.db.execute("SELECT type FROM docs WHERE id=?", (rid,)).fetchone()
+        return row["type"] if row else ""
+
+    @_serialized
+    def clear_resolved_misses(self) -> None:
+        """Drop miss rows that grew an alias."""
+        self.db.execute("DELETE FROM misses WHERE found_id != ''")
+        self.db.commit()
+
     # -- bookkeeping ------------------------------------------------------------
 
+    @_serialized
     def record_usage(self, rid: str) -> None:
         self.db.execute(
             "INSERT INTO usage(id,count,last) VALUES(?,1,?) "
@@ -178,12 +213,14 @@ class Index:
             (rid, time.time()))
         self.db.commit()
 
+    @_serialized
     def log_miss(self, query: str) -> None:
         self.db.execute(
             "INSERT INTO misses(query,ts) VALUES(?,?)",
             (query, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())))
         self.db.commit()
 
+    @_serialized
     def log_hit_after_miss(self, query: str, rid: str) -> None:
         """Agent searched (miss) then read a record — a candidate alias (plan §5.2)."""
         row = self.db.execute(
@@ -197,6 +234,7 @@ class Index:
                 (query, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), rid))
         self.db.commit()
 
+    @_serialized
     def alias_candidates(self) -> list[tuple[str, str, int]]:
         """Strong miss→read pairs, grouped: (query, record id, occurrences)."""
         rows = self.db.execute(
@@ -204,11 +242,13 @@ class Index:
             "WHERE found_id != '' GROUP BY query, found_id HAVING n >= 1").fetchall()
         return [(r["query"], r["found_id"], r["n"]) for r in rows]
 
+    @_serialized
     def miss_rate(self) -> tuple[int, int]:
         total = self.db.execute("SELECT COUNT(*) FROM misses").fetchone()[0]
         zero = self.db.execute("SELECT COUNT(*) FROM misses WHERE found_id=''").fetchone()[0]
         return zero, total
 
+    @_serialized
     def top_used(self, limit: int = 40) -> list[str]:
         rows = self.db.execute(
             "SELECT id FROM usage ORDER BY last DESC LIMIT ?", (limit,)).fetchall()

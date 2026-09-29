@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import tempfile
+import threading
 import time
 import tomllib
 from contextlib import contextmanager
@@ -24,10 +25,13 @@ from .paths import DIR_NAMES, GITIGNORE, resolve_store
 
 CONFIG_NAME = "intuition.toml"
 STATE_DIR = ".intuition"
-# Surfaces the Steward writes and a rollback therefore reverts. Everything else
-# in the store (inbox, raw capture) is append-only and survives a rollback.
-VAULT_PATHS = ("shared", "working", "agents", "observations", "timeline",
-               "reports", "tasks", "review")
+# Surfaces the Steward rewrites in a run, and the subset where a run can create a
+# file that was never committed. A rollback reverts tracked changes under all of
+# them and removes untracked files only under the second: inbox and raw capture
+# are append-only, and review/, tasks/, observations/drafts/ are written by agents
+# and hosts rather than by the run being undone.
+ROLLBACK_PATHS = ("shared", "agents", "observations", "reports", "timeline")
+ROLLBACK_NEW_FILE_PATHS = ("shared", "agents")
 DEFAULT_CONFIG = """\
 [store]
 path = "{path}"
@@ -84,6 +88,9 @@ class Store:
         self._rec_cache: dict[str, Record] | None = None
         self._rec_cache_mt: float | None = None
         self._walk_cache: tuple[float, float] | None = None
+        # a host can serve several threads from one Store; re-entrant because
+        # scan_records holds it while asking vault_mtime for the cache key
+        self._cache_lock = threading.RLock()
 
     # -- config ------------------------------------------------------------
 
@@ -229,42 +236,45 @@ class Store:
     def vault_mtime(self) -> float:
         """Newest mtime under shared/ — cheap walk for cache validation (§5.3).
         Memoised for 250 ms; every Store.write invalidates immediately."""
-        now = time.monotonic()
-        walk = self.__dict__.get("_walk_cache")
-        if walk and now - walk[0] < 0.25:
-            return walk[1]
-        latest = 0.0
-        shared = self.dir("shared")
-        if shared.exists():
-            for dirpath, _dirnames, filenames in os.walk(shared):
-                for fn in filenames:
-                    if fn.endswith(".md"):
-                        m = os.stat(os.path.join(dirpath, fn)).st_mtime
-                        if m > latest:
-                            latest = m
-        self._walk_cache = (now, latest)
-        return latest
+        with self._cache_lock:
+            now = time.monotonic()
+            walk = self._walk_cache
+            if walk and now - walk[0] < 0.25:
+                return walk[1]
+            latest = 0.0
+            shared = self.dir("shared")
+            if shared.exists():
+                for dirpath, _dirnames, filenames in os.walk(shared):
+                    for fn in filenames:
+                        if fn.endswith(".md"):
+                            m = os.stat(os.path.join(dirpath, fn)).st_mtime
+                            if m > latest:
+                                latest = m
+            self._walk_cache = (now, latest)
+            return latest
 
     def scan_records(self) -> dict[str, Record]:
-        mt = self.vault_mtime()
-        recs = self.__dict__.get("_rec_cache")
-        if recs is not None and self.__dict__.get("_rec_cache_mt") == mt:
-            return recs
-        out: dict[str, Record] = {}
-        for p in sorted(self.dir("shared").rglob("*.md")):
-            if p.name in ("PROFILE.md", "ONEPAGER.md"):
-                continue
-            rec = parse_record(p.read_text(), path=str(p))
-            if rec.id:
-                out[rec.id] = rec
-        self._rec_cache = out
-        self._rec_cache_mt = mt
-        return out
+        """Every record in the vault, cached against the newest mtime."""
+        with self._cache_lock:
+            mt = self.vault_mtime()
+            if self._rec_cache is not None and self._rec_cache_mt == mt:
+                return self._rec_cache
+            out: dict[str, Record] = {}
+            for p in sorted(self.dir("shared").rglob("*.md")):
+                if p.name in ("PROFILE.md", "ONEPAGER.md"):
+                    continue
+                rec = parse_record(p.read_text(), path=str(p))
+                if rec.id:
+                    out[rec.id] = rec
+            self._rec_cache = out
+            self._rec_cache_mt = mt
+            return out
 
     def invalidate_record_cache(self) -> None:
-        self._rec_cache = None
-        self._rec_cache_mt = None
-        self._walk_cache = None
+        with self._cache_lock:
+            self._rec_cache = None
+            self._rec_cache_mt = None
+            self._walk_cache = None
 
     def load_record(self, rec_id: str) -> Record | None:
         recs = self.scan_records()
@@ -314,9 +324,13 @@ class Store:
     def commit(self, msg: str, add_all: bool = False,
                paths: tuple[str, ...] | None = None) -> str:
         """Stage and commit. With *paths*, only those pathspecs are staged, so the
-        hand-edit sweep cannot swallow agent-written inbox or raw capture."""
+        hand-edit sweep cannot swallow agent-written inbox or raw capture. A path
+        that is not there is skipped rather than aborting the commit."""
         if paths:
-            self.git("add", "-A", "--", *paths)
+            usable = [name for name in paths if self.dir(name).exists()]
+            if not usable:
+                return ""
+            self.git("add", "-A", "--", *usable)
         else:
             self.git("add", "-A" if add_all else ".")
         if not self._staged_changes():
@@ -324,19 +338,22 @@ class Store:
         self.git("commit", "-q", "-m", msg)
         return self.git("rev-parse", "--short", "HEAD").strip()
 
-    def rollback(self) -> None:
+    def rollback(self, restore_raw: bool = False) -> None:
         """Abort the current run: the vault goes back to HEAD (plan §6.2 step 8).
 
-        Only the surfaces the Steward writes are reverted. Inbox and raw capture
-        are left exactly as they are, because a proposal an agent just made is
-        not this run's to undo and is not yet in any commit. Pathspecs that match
-        nothing are skipped: an empty vault directory must not abort the revert.
+        Tracked files under the surfaces this run rewrites are checked out from
+        HEAD, and untracked files are removed only where a run can create one
+        (a record or a procedures file). Directories are left in place and paths
+        that match nothing are skipped, so a rollback can never make the next run
+        fail on a missing path. ``restore_raw`` also brings back raw capture the
+        deep pass deleted, which is the one deletion a run makes outside the vault.
         """
-        changed = self.git("diff", "--name-only", "HEAD", "--", *VAULT_PATHS, check=False)
+        paths = (*ROLLBACK_PATHS, "raw") if restore_raw else ROLLBACK_PATHS
+        changed = self.git("diff", "--name-only", "HEAD", "--", *paths, check=False)
         tracked = [line.strip() for line in changed.splitlines() if line.strip()]
         if tracked:
             self.git("checkout", "HEAD", "--", *tracked, check=False)
-        present = [name for name in VAULT_PATHS if self.dir(name).exists()]
+        present = [name for name in ROLLBACK_NEW_FILE_PATHS if self.dir(name).is_dir()]
         if present:
             self.git("clean", "-fd", "--", *present, check=False)
         self.invalidate_record_cache()

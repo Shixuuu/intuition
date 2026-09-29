@@ -238,9 +238,10 @@ MEMORY_TOOL_SCHEMAS: dict[str, dict] = {
                 "type": "object",
                 "required": ["kind", "text", "source", "evidence", "confidence"],
                 "properties": {
-                    "kind": {"enum": ["fact", "preference", "decision", "procedure", "question"]},
+                    "kind": {"type": "string",
+                             "enum": ["fact", "preference", "decision", "procedure", "question"]},
                     "about": {"type": "string"}, "text": {"type": "string"},
-                    "source": {"enum": ["user", "agent", "external"]},
+                    "source": {"type": "string", "enum": ["user", "agent", "external"]},
                     "evidence": {"type": "string"},
                     "confidence": {"type": "number"}}}}},
             "required": ["task_id", "learnings"]},

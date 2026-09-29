@@ -35,6 +35,11 @@ interface ToolSpec {
   parameters: unknown;
 }
 
+interface Runtime {
+  command: string;
+  args: string[];
+}
+
 interface Route {
   method: string;
   extra?: Record<string, unknown>;
@@ -66,7 +71,8 @@ class IntuitionRpc {
 
   start(): void {
     if (this.proc) return;
-    this.proc = spawn("intuition", ["rpc"], {
+    const runtime = loadRuntime();
+    this.proc = spawn(runtime.command, runtime.args, {
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -155,6 +161,15 @@ function loadManifest(): { main: ToolSpec[]; subagent: ToolSpec[] } {
     throw new Error(
       `intuition: cannot read ${manifest}; reinstall with \`intuition install pi\` (${error})`,
     );
+  }
+}
+
+/** The RPC command the installer recorded, so the CLI needs no PATH entry. */
+function loadRuntime(): Runtime {
+  try {
+    return JSON.parse(readFileSync(path.join(here, "runtime.json"), "utf8"));
+  } catch {
+    return { command: "intuition", args: ["rpc"] };
   }
 }
 

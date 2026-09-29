@@ -67,6 +67,24 @@ def archive(store, ids: set[str]) -> int:
     return len(moved)
 
 
+def restore_pending(store, ids: set[str]) -> int:
+    """Put archived entries back in the pending queue after a failed run.
+
+    The archive copy stays, so the worst case is a duplicate archive line rather
+    than a proposal that was archived and never applied.
+    """
+    if not ids:
+        return 0
+    restored = 0
+    archive = store.dir("inbox/archive")
+    for path in sorted(archive.glob("*.jsonl")) if archive.exists() else ():
+        for item in store.read_jsonl(path.relative_to(store.root)):
+            if item.get("id") in ids:
+                store.append_jsonl(PENDING, item)
+                restored += 1
+    return restored
+
+
 def quarantine(store, item: dict, reason: str) -> None:
     item = dict(item, quarantine_reason=reason)
     store.append_jsonl("review/quarantine.jsonl", item)

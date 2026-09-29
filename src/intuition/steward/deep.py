@@ -21,6 +21,7 @@ def deep_pass(store, index, *, reason: str = "nightly") -> dict:
     result["light"] = light_pass(store, index, reason=f"deep:{reason}")
 
     jobs = result["jobs"]
+    observed = False
     try:
         jobs["expire"] = expire(store)
         jobs["aliases"] = mine_aliases(store, index)
@@ -29,17 +30,21 @@ def deep_pass(store, index, *, reason: str = "nightly") -> dict:
         jobs["procedures"] = promote_procedures(store)
         if _model_configured(store):
             jobs["observe"] = observe_raw(store, index)
+            observed = jobs["observe"] != "below threshold"
             jobs["condense"] = condense_log(store)
-        # retention runs last and skips capture the observer has not consumed
+        # retention runs after observation and skips capture nobody has read
         jobs["retention"] = retention(store)
         report(store, result, seconds=time.time() - started)
         result["committed"] = store.commit(
             f"steward(deep): {len(jobs)} jobs [{reason}]", add_all=True)
     except Exception as e:                     # one fault rolls back every job
-        store.rollback()
+        store.rollback(restore_raw=True)
         result["error"] = f"deep jobs failed, rolled back: {e}"
         state_mod.touch(store, light=True)
         return result
+    if observed:
+        # the observations are committed now, so consuming the raw is safe
+        mark_raw_observed(store)
     state_mod.touch(store, deep=True)
     return result
 
@@ -83,8 +88,7 @@ def mine_aliases(store, index) -> list[str]:
             rec.aliases.append(alias[:48])
             store.write_record(rec)
             added.append(f"{alias} → {rid}")
-    index.db.execute("DELETE FROM misses WHERE found_id != ''")
-    index.db.commit()
+    index.clear_resolved_misses()
     return added
 
 
@@ -225,7 +229,6 @@ def observe_raw(store, index) -> str:
               "\"priority\": \"high|med|low\", \"text\": \"…\"}]}")
     plan = call_json(store, "deep", system, text[:80000])
     n = _write_observations(store, plan.get("observations", []))
-    mark_raw_observed(store)
     return f"{n} observations"
 
 
