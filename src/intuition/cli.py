@@ -312,7 +312,7 @@ def cmd_install_pi(args) -> None:
 
     import intuition
 
-    from .tools import schemas_for
+    from .tools import host_manifest
 
     src = Path(intuition.__file__).parent / "adapters" / "pi_package"
     dst = Path(args.pi_home).expanduser() / "intuition"
@@ -321,9 +321,7 @@ def cmd_install_pi(args) -> None:
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
     manifest = dst / "extensions" / "intuition" / "tools.json"
-    manifest.write_text(json.dumps(
-        {"main": schemas_for("main"), "subagent": schemas_for("subagent")},
-        indent=1) + "\n")
+    manifest.write_text(json.dumps(host_manifest(), indent=1) + "\n")
     runtime = dst / "extensions" / "intuition" / "runtime.json"
     runtime.write_text(json.dumps(
         {"command": sys.executable, "args": ["-m", "intuition.cli", "rpc"]},

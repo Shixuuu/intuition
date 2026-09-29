@@ -152,6 +152,9 @@ def test_rpc_config_methods_use_the_same_writer(store, index):
         rpc.dispatch(store, index, "config_set", {"key": "nope", "value": "1"})
 
 
+PACKAGE_DIR = Path(__file__).parent.parent / "src/intuition/adapters/pi_package"
+
+
 def extension_source() -> str:
     return (Path(__file__).parent.parent
             / "src/intuition/adapters/pi_package/extensions/intuition/index.ts").read_text()
@@ -168,6 +171,41 @@ def test_pi_extension_configures_through_a_command_not_a_tool():
     from intuition.tools import MEMORY_TOOL_SCHEMAS
 
     assert not [name for name in MEMORY_TOOL_SCHEMAS if "config" in name]
+
+
+def test_pi_package_manifests_agree_and_point_at_real_files():
+    """The repo manifest is what a git or npm install reads; the nested one is
+    what `intuition install pi` copies. Their shared fields must not drift."""
+    root = json.loads((Path(__file__).parent.parent / "package.json").read_text())
+    nested = json.loads((PACKAGE_DIR / "package.json").read_text())
+
+    for field in ("name", "version", "description", "license", "keywords",
+                  "peerDependencies"):
+        assert root[field] == nested[field], field
+    assert "pi-package" in root["keywords"]
+    assert root["pi"]["extensions"] == [
+        "./src/intuition/adapters/pi_package/extensions/intuition/index.ts"], \
+        "the repo manifest has to point at the extension that exists"
+    assert nested["pi"]["extensions"] == ["./extensions/intuition/index.ts"]
+    for manifest, base in ((root, Path(__file__).parent.parent), (nested, PACKAGE_DIR)):
+        for rel in manifest["pi"]["extensions"]:
+            assert (base / rel).exists(), rel
+    for rel in root["files"]:
+        assert (Path(__file__).parent.parent / rel).exists(), rel
+
+
+def test_the_shipped_tool_manifest_matches_the_schema():
+    """The committed manifest is what a git install uses before any Python step,
+    so it has to equal what the schema says."""
+    from intuition.tools import host_manifest
+
+    shipped = json.loads((PACKAGE_DIR / "extensions/intuition/tools.json").read_text())
+    assert shipped == host_manifest(), (
+        "regenerate with: python -c \"import json,pathlib;"
+        "from intuition.tools import host_manifest;"
+        "pathlib.Path('src/intuition/adapters/pi_package/extensions/intuition/tools.json')"
+        ".write_text(json.dumps(host_manifest(), indent=1) + chr(10))\""
+    )
 
 
 def test_pi_extension_reports_a_broken_install_actionably():

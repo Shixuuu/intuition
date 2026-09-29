@@ -271,6 +271,15 @@ def schemas_for(role: str) -> list[dict]:
             for name in TOOL_ORDER if name in allowed]
 
 
+def host_manifest() -> dict:
+    """The tool manifest the Pi package ships and `intuition install pi` writes.
+
+    One definition, so the copy committed beside the extension, the copy the
+    installer generates, and the schemas the Hermes adapter reads cannot drift.
+    """
+    return {"main": schemas_for("main"), "subagent": schemas_for("subagent")}
+
+
 def handle_tool_call(store, index, tool_name: str, args: dict,
                      *, role: str = "main") -> dict:
     if tool_name not in TOOL_HANDLERS:

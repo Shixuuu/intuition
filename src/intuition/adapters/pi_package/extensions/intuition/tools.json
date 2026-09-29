@@ -1,0 +1,286 @@
+{
+ "main": [
+  {
+   "name": "memory_search",
+   "description": "Search memory. Give 1-3 phrasings of your query in the user's own words.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "queries": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 3
+     },
+     "as_of": {
+      "type": "string",
+      "description": "YYYY-MM or YYYY-MM-DD, what was true then"
+     },
+     "type": {
+      "type": "string",
+      "description": "person|org|preference|topic|decision|workstream|procedure"
+     }
+    },
+    "required": [
+     "queries"
+    ]
+   }
+  },
+  {
+   "name": "memory_read",
+   "description": "Read one full memory record by id or name.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "id_or_name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id_or_name"
+    ]
+   }
+  },
+  {
+   "name": "memory_timeline",
+   "description": "Read a daily or weekly timeline rollup.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "period": {
+      "type": "string",
+      "description": "daily|weekly"
+     },
+     "date": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  {
+   "name": "memory_note",
+   "description": "Save a memory proposal. evidence MUST be the user's exact words.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "text": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string",
+      "description": "fact|preference|decision|procedure|question"
+     },
+     "about": {
+      "type": "string",
+      "description": "record id this is about, if known"
+     },
+     "evidence": {
+      "type": "string"
+     },
+     "confidence": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "text",
+     "evidence"
+    ]
+   }
+  },
+  {
+   "name": "memory_forget",
+   "description": "Request removal of a memory.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "about": {
+      "type": "string",
+      "description": "record id"
+     },
+     "text": {
+      "type": "string",
+      "description": "text to remove"
+     }
+    },
+    "required": [
+     "about",
+     "text"
+    ]
+   }
+  },
+  {
+   "name": "memory_now",
+   "description": "Replace working/NOW.md: your plan, open threads, task ids.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "content": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "content"
+    ]
+   }
+  },
+  {
+   "name": "memory_brief",
+   "description": "Build a delegation brief with decisions and relevant memory. Returns brief, memory_prefix and output_schema for the child.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "agent": {
+      "type": "string"
+     },
+     "goal": {
+      "type": "string"
+     },
+     "output": {
+      "type": "string"
+     },
+     "tools": {
+      "type": "string"
+     },
+     "boundaries": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent",
+     "goal"
+    ]
+   }
+  },
+  {
+   "name": "memory_learn",
+   "description": "Record a returning subagent's learnings (review them first).",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "learnings": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "kind",
+        "text",
+        "source",
+        "evidence",
+        "confidence"
+       ],
+       "properties": {
+        "kind": {
+         "type": "string",
+         "enum": [
+          "fact",
+          "preference",
+          "decision",
+          "procedure",
+          "question"
+         ]
+        },
+        "about": {
+         "type": "string"
+        },
+        "text": {
+         "type": "string"
+        },
+        "source": {
+         "type": "string",
+         "enum": [
+          "user",
+          "agent",
+          "external"
+         ]
+        },
+        "evidence": {
+         "type": "string"
+        },
+        "confidence": {
+         "type": "number"
+        }
+       }
+      }
+     }
+    },
+    "required": [
+     "task_id",
+     "learnings"
+    ]
+   }
+  },
+  {
+   "name": "memory_secure_get",
+   "description": "Read one item from the secure scope (main assistant only, opt-in).",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "key": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "key"
+    ]
+   }
+  },
+  {
+   "name": "memory_status",
+   "description": "Inbox, records, miss rate, quarantine and the current commit.",
+   "parameters": {
+    "type": "object",
+    "properties": {}
+   }
+  }
+ ],
+ "subagent": [
+  {
+   "name": "memory_search",
+   "description": "Search memory. Give 1-3 phrasings of your query in the user's own words.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "queries": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "minItems": 1,
+      "maxItems": 3
+     },
+     "as_of": {
+      "type": "string",
+      "description": "YYYY-MM or YYYY-MM-DD, what was true then"
+     },
+     "type": {
+      "type": "string",
+      "description": "person|org|preference|topic|decision|workstream|procedure"
+     }
+    },
+    "required": [
+     "queries"
+    ]
+   }
+  },
+  {
+   "name": "memory_read",
+   "description": "Read one full memory record by id or name.",
+   "parameters": {
+    "type": "object",
+    "properties": {
+     "id_or_name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id_or_name"
+    ]
+   }
+  }
+ ]
+}

@@ -11,8 +11,8 @@
  * spawns them) and get the read-only tools.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Type } from "@earendil-works/pi-ai";
@@ -84,7 +84,7 @@ class IntuitionRpc {
 
   start(): void {
     if (this.proc) return;
-    const runtime = loadRuntime();
+    const runtime = resolveRuntime();
     this.proc = spawn(runtime.command, runtime.args, {
       env: { ...process.env },
       stdio: ["pipe", "pipe", "pipe"],
@@ -106,6 +106,7 @@ class IntuitionRpc {
       this.startError = error;
       this.spawnFailed = true;
       this.proc = null;
+      cachedRuntime = null;              // the CLI may appear; probe again next time
       this.failAll(this.unavailable("rpc"));
     });
     this.proc.on("exit", (code: number | null) => {
@@ -193,6 +194,9 @@ const here = typeof __dirname === "string"
   ? __dirname
   : path.dirname(fileURLToPath(import.meta.url));
 
+const recordedRuntime = recordedRuntimeFile();
+let cachedRuntime: Runtime | null = null;
+
 function loadManifest(): { main: ToolSpec[]; subagent: ToolSpec[] } {
   const manifest = path.join(here, "tools.json");
   try {
@@ -204,13 +208,75 @@ function loadManifest(): { main: ToolSpec[]; subagent: ToolSpec[] } {
   }
 }
 
-/** The RPC command the installer recorded, so the CLI needs no PATH entry. */
-function loadRuntime(): Runtime {
-  try {
-    return JSON.parse(readFileSync(path.join(here, "runtime.json"), "utf8"));
-  } catch {
-    return { command: "intuition", args: ["rpc"] };
+/** The RPC command, resolved once. `runtime.json` is what `intuition install pi`
+ * records; the other steps let a plain `pi install` work on a machine where the
+ * CLI was installed some other way (pipx, uv, pip --user, a checkout). */
+function resolveRuntime(): Runtime {
+  if (cachedRuntime) return cachedRuntime;
+  const override = process.env.INTUITION_BIN;
+  if (override) {
+    cachedRuntime = { command: override, args: ["rpc"] };
+    return cachedRuntime;
   }
+  if (recordedRuntime && commandWorks(recordedRuntime)) {
+    cachedRuntime = recordedRuntime;
+    return cachedRuntime;
+  }
+  if (probe("intuition", ["--version"])) {
+    cachedRuntime = { command: "intuition", args: ["rpc"] };
+    return cachedRuntime;
+  }
+  for (const python of ["python3", "python"]) {
+    if (probe(python, ["-m", "intuition.cli", "--version"])) {
+      cachedRuntime = { command: python, args: ["-m", "intuition.cli", "rpc"] };
+      return cachedRuntime;
+    }
+  }
+  cachedRuntime = recordedRuntime ?? { command: "intuition", args: ["rpc"] };
+  return cachedRuntime;
+}
+
+function recordedRuntimeFile(): Runtime | null {
+  try {
+    const parsed = JSON.parse(readFileSync(path.join(here, "runtime.json"), "utf8"));
+    return parsed?.command ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function commandWorks(runtime: Runtime): boolean {
+  if (runtime.command.includes("/")) return existsSync(runtime.command);
+  return probe(runtime.command, ["--version"]);
+}
+
+function probe(command: string, args: string[]): boolean {
+  try {
+    const result = spawnSync(command, args, { stdio: "ignore", timeout: 10_000 });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Run one CLI subcommand directly, for the parts that predate the RPC server. */
+function runCli(args: string[]): Promise<{ code: number | null; output: string }> {
+  const runtime = resolveRuntime();
+  const cliArgs = runtime.args[0] === "-m"
+    ? [...runtime.args.slice(0, -1), ...args]     // keep the -m module form
+    : args;
+  return new Promise((resolve) => {
+    const child = spawn(runtime.command, cliArgs, { env: { ...process.env } });
+    let output = "";
+    child.stdout?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr?.on("data", (chunk: Buffer) => { output += chunk.toString(); });
+    child.on("error", (error: Error) => {
+      resolve({ code: null,
+                output: `cannot run the intuition CLI (${error.message}); ` +
+                        "install it, then run `intuition install pi`" });
+    });
+    child.on("close", (code: number | null) => resolve({ code, output: output.trim() }));
+  });
 }
 
 function messageText(message: any): string {
@@ -278,6 +344,7 @@ function settingsSummary(rows: Setting[]): string {
     "/intuition <key>            read one setting",
     "/intuition <key> <value>    write one setting",
     "/intuition help             the same list with each setting's help line",
+    "/intuition init|doctor|tick create the store, check it, run a Steward pass",
   ].join("\n");
 }
 
@@ -311,6 +378,15 @@ function registerConfigCommand(pi: ExtensionAPI): void {
           return;
         }
         const [key, ...rest] = parts;
+        // the store has to exist before the rpc server can start, so these run
+        // the CLI directly rather than going through the channel
+        if (key === "init" || key === "doctor" || key === "tick") {
+          const { code, output } = await runCli([key, ...rest]);
+          await loadSettings().catch(() => undefined);
+          ctx.ui.notify(output || `intuition ${key} exited ${code}`,
+                        code === 0 ? "info" : "error");
+          return;
+        }
         if (key === "help") {
           ctx.ui.notify(settingsHelp(settings.length ? settings : await loadSettings()),
                         "info");

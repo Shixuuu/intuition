@@ -1,10 +1,14 @@
 {
-  "name": "intuition-pi-extension",
+  "name": "intuition-pi",
   "version": "0.1.0",
-  "private": true,
-  "description": "Intuition memory tools for Pi",
+  "description": "Intuition memory for Pi: search, notes, and the Steward's settings, backed by Markdown in git",
+  "license": "MIT",
   "keywords": ["pi-package"],
   "pi": {
     "extensions": ["./extensions/intuition/index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
   }
 }

@@ -39,6 +39,32 @@ intuition install pi             # ~/.pi/agent/intuition/ + `pi install` registr
 Then: `hermes config set memory.provider intuition` for Hermes, and Pi picks the
 registered package up from its settings.
 
+## Install as a Pi package
+
+The repo root is a Pi package (`keywords: ["pi-package"]` and a `pi` manifest), so
+Pi can install it directly:
+
+```bash
+pi install /path/to/intuition      # a local checkout; git or npm once published
+pi list                            # shows the package
+```
+
+The extension then looks for the `intuition` CLI in this order: `INTUITION_BIN`,
+the `runtime.json` that `intuition install pi` records, `intuition` on `PATH`, and
+`python3 -m intuition.cli`. Inside a session:
+
+```
+/intuition init       create the store, which the RPC channel needs first
+/intuition            every setting, current value, marker on your changes
+/intuition doctor     store, index, git, and Steward mode in one line
+/intuition steward.deep_time 04:30
+```
+
+`npm publish` from the repo root ships only the extension, its generated
+`tools.json`, the readmes, and the licence, which is what the `files` list holds.
+The Python side always comes from pip, pipx, or a checkout, because npm cannot
+install it.
+
 ## Day-to-day
 
 ```bash

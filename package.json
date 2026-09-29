@@ -1,0 +1,21 @@
+{
+  "name": "intuition-pi",
+  "version": "0.1.0",
+  "description": "Intuition memory for Pi: search, notes, and the Steward's settings, backed by Markdown in git",
+  "license": "MIT",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./src/intuition/adapters/pi_package/extensions/intuition/index.ts"]
+  },
+  "files": [
+    "src/intuition/adapters/pi_package/extensions/intuition/index.ts",
+    "src/intuition/adapters/pi_package/extensions/intuition/tools.json",
+    "src/intuition/adapters/pi_package/extensions/intuition/README.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  }
+}
