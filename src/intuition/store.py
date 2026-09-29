@@ -24,6 +24,10 @@ from .paths import DIR_NAMES, GITIGNORE, resolve_store
 
 CONFIG_NAME = "intuition.toml"
 STATE_DIR = ".intuition"
+# Surfaces the Steward writes and a rollback therefore reverts. Everything else
+# in the store (inbox, raw capture) is append-only and survives a rollback.
+VAULT_PATHS = ("shared", "working", "agents", "observations", "timeline",
+               "reports", "tasks", "review")
 DEFAULT_CONFIG = """\
 [store]
 path = "{path}"
@@ -35,19 +39,20 @@ hop_decay = 0.3
 pending_days = 2
 
 [profile]
-pinned_max_tokens = 1000
-generated_max_tokens = 3000
+pinned_max_chars = 4000
+generated_max_chars = 12000
 index_lines = 40
 
 [observe]
-observer_raw_tokens = 20000
-reflector_log_tokens = 12000
-prefix_max_tokens = 4000
+observer_raw_chars = 80000
+reflector_log_chars = 48000
+prefix_max_chars = 16000
 
 [steward]
 tick_minutes = 15
 light_inbox_items = 10
-light_raw_tokens = 20000
+light_raw_chars = 80000
+pending_age_minutes = 20
 idle_minutes = 30
 deep_time = "03:00"
 llm_command_light = ""
@@ -177,6 +182,34 @@ class Store:
                 fh.flush()
                 os.fsync(fh.fileno())
 
+    def drop_jsonl_ids(self, rel: str | Path, ids: set[str]) -> int:
+        """Remove the lines whose ``id`` is in *ids*, atomically.
+
+        Holds the same lock appends take and re-reads the file inside it, so an
+        entry appended after the caller's own read survives instead of being
+        overwritten by a stale rewrite. Returns the number removed.
+        """
+        p = self.resolve(rel)
+        if not p.exists():
+            return 0
+        with self.lock("jsonl-" + p.name.replace(".", "-")):
+            keep, dropped = [], 0
+            for line in p.read_text().splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except json.JSONDecodeError:
+                    keep.append(line)
+                    continue
+                if str(obj.get("id")) in ids:
+                    dropped += 1
+                else:
+                    keep.append(line)
+            if dropped:
+                self.write(p, "".join(f"{line}\n" for line in keep))
+            return dropped
+
     def read_jsonl(self, rel: str | Path) -> list[dict]:
         p = self.resolve(rel)
         if not p.exists():
@@ -203,7 +236,7 @@ class Store:
         latest = 0.0
         shared = self.dir("shared")
         if shared.exists():
-            for dirpath, dirnames, filenames in os.walk(shared):
+            for dirpath, _dirnames, filenames in os.walk(shared):
                 for fn in filenames:
                     if fn.endswith(".md"):
                         m = os.stat(os.path.join(dirpath, fn)).st_mtime
@@ -273,17 +306,40 @@ class Store:
     def dirty(self) -> bool:
         return bool(self.git("status", "--porcelain").strip())
 
-    def commit(self, msg: str, add_all: bool = False) -> str:
-        self.git("add", "-A" if add_all else ".")
-        if not self.dirty():
+    def _staged_changes(self) -> bool:
+        r = subprocess.run(["git", "-C", str(self.root), "diff", "--cached", "--quiet"],
+                           capture_output=True, text=True)
+        return r.returncode != 0
+
+    def commit(self, msg: str, add_all: bool = False,
+               paths: tuple[str, ...] | None = None) -> str:
+        """Stage and commit. With *paths*, only those pathspecs are staged, so the
+        hand-edit sweep cannot swallow agent-written inbox or raw capture."""
+        if paths:
+            self.git("add", "-A", "--", *paths)
+        else:
+            self.git("add", "-A" if add_all else ".")
+        if not self._staged_changes():
             return ""
         self.git("commit", "-q", "-m", msg)
         return self.git("rev-parse", "--short", "HEAD").strip()
 
     def rollback(self) -> None:
-        """Abort the current run: tree back to HEAD (plan §6.2 step 8)."""
-        self.git("reset", "--hard", "HEAD", check=False)
-        self.git("clean", "-fd", check=False)
+        """Abort the current run: the vault goes back to HEAD (plan §6.2 step 8).
+
+        Only the surfaces the Steward writes are reverted. Inbox and raw capture
+        are left exactly as they are, because a proposal an agent just made is
+        not this run's to undo and is not yet in any commit. Pathspecs that match
+        nothing are skipped: an empty vault directory must not abort the revert.
+        """
+        changed = self.git("diff", "--name-only", "HEAD", "--", *VAULT_PATHS, check=False)
+        tracked = [line.strip() for line in changed.splitlines() if line.strip()]
+        if tracked:
+            self.git("checkout", "HEAD", "--", *tracked, check=False)
+        present = [name for name in VAULT_PATHS if self.dir(name).exists()]
+        if present:
+            self.git("clean", "-fd", "--", *present, check=False)
+        self.invalidate_record_cache()
 
     def head(self) -> str:
         return self.git("rev-parse", "--short", "HEAD", check=False).strip() or "(empty)"

@@ -1,0 +1,10 @@
+{
+  "name": "intuition-pi-extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Intuition memory tools for Pi",
+  "keywords": ["pi-package"],
+  "pi": {
+    "extensions": ["./extensions/intuition/index.ts"]
+  }
+}

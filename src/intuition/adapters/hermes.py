@@ -20,10 +20,8 @@ import queue
 import threading
 
 try:                                     # inside Hermes
-    from agent.memory_provider import (MemoryProvider, spawn_context_thread)
-    _HERMES = True
+    from agent.memory_provider import MemoryProvider, spawn_context_thread
 except ImportError:                      # standalone / tests
-    _HERMES = False
 
     class MemoryProvider:                # minimal stand-in with the same hooks
         pre_compress_checkpoint_api_version = 1
@@ -39,61 +37,10 @@ except ImportError:                      # standalone / tests
         return t
 
 from .. import context as ctx_mod
+from .. import tools as tools_mod
 from ..index import Index
 from ..store import Store
-from ..tools import SUBAGENT_TOOLS, TOOL_HANDLERS, handle_tool_call
-
-
-def _schema(name: str, description: str, properties: dict, required: list[str]) -> dict:
-    return {"name": name, "description": description,
-            "parameters": {"type": "object", "properties": properties,
-                           "required": required}}
-
-
-def _s(**props):
-    return {"type": "string", **props}
-
-
-MAIN_TOOL_SCHEMAS = [
-    _schema("memory_search",
-            "Search memory. Give 1-3 phrasings of your query in the user's own words.",
-            {"queries": {"type": "array", "items": {"type": "string"},
-                         "minItems": 1, "maxItems": 3},
-             "as_of": _s(description="YYYY-MM or YYYY-MM-DD — what was true then"),
-             "type": _s(description="person|org|preference|topic|decision|workstream|procedure")},
-            ["queries"]),
-    _schema("memory_read", "Read one full record by id or name.",
-            {"id_or_name": _s()}, ["id_or_name"]),
-    _schema("memory_timeline", "Read a daily or weekly timeline rollup.",
-            {"period": _s(description="daily|weekly"), "date": _s()}, []),
-    _schema("memory_note",
-            "Save a memory proposal. evidence MUST be the user's exact words.",
-            {"text": _s(), "kind": _s(description="fact|preference|decision|procedure|question"),
-             "about": _s(description="record id this is about, if known"),
-             "evidence": _s(), "confidence": {"type": "number"}}, ["text", "evidence"]),
-    _schema("memory_forget", "Request removal of a memory.",
-            {"about": _s(description="record id"), "text": _s(description="text to remove")},
-            ["about", "text"]),
-    _schema("memory_now", "Replace working/NOW.md — your plan, open threads, task ids.",
-            {"content": _s()}, ["content"]),
-    _schema("memory_brief",
-            "Build a delegation brief with decisions + relevant memory. Returns "
-            "brief, memory_prefix and output_schema to pass to delegate_task.",
-            {"agent": _s(), "goal": _s(), "output": _s(), "tools": _s(),
-             "boundaries": _s()}, ["agent", "goal"]),
-    _schema("memory_learn",
-            "Record a returning subagent's learnings (review them first).",
-            {"task_id": _s(), "learnings": {"type": "array", "items": {
-                "type": "object",
-                "required": ["kind", "text", "source", "evidence", "confidence"],
-                "properties": {
-                    "kind": {"enum": ["fact", "preference", "decision", "procedure", "question"]},
-                    "about": {"type": "string"}, "text": {"type": "string"},
-                    "source": {"enum": ["user", "agent", "external"]},
-                    "evidence": {"type": "string"},
-                    "confidence": {"type": "number"}}}}},
-            ["task_id", "learnings"]),
-]
+from ..tools import handle_tool_call
 
 
 class IntuitionProvider(MemoryProvider):
@@ -110,7 +57,7 @@ class IntuitionProvider(MemoryProvider):
         self._agent = "main"
         self._session = ""
         self._prefix = ""
-        self._turns: "queue.Queue[tuple]" = queue.Queue()
+        self._turns: queue.Queue[tuple] = queue.Queue()
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -187,9 +134,6 @@ class IntuitionProvider(MemoryProvider):
             try:
                 for role, text in (("user", user), ("assistant", asst)):
                     if text.strip():
-                        line = sum(1 for _ in
-                                   self._store.dir(f"raw/{self._store.today()}.jsonl").open()) \
-                            if self._store.dir(f"raw/{self._store.today()}.jsonl").exists() else 0
                         self._store.append_jsonl(
                             f"raw/{self._store.today()}.jsonl",
                             {"ts": self._store.now_iso(), "host": "hermes",
@@ -201,12 +145,8 @@ class IntuitionProvider(MemoryProvider):
     # -- tools ----------------------------------------------------------------------
 
     def get_tool_schemas(self) -> list[dict]:
-        if self._role == "subagent":
-            return [s for s in MAIN_TOOL_SCHEMAS
-                    if s["name"] in SUBAGENT_TOOLS]
-        if self._role == "cron":
-            return []
-        return MAIN_TOOL_SCHEMAS
+        role = self._role if self._role in ("subagent", "cron") else "main"
+        return tools_mod.schemas_for(role)
 
     def handle_tool_call(self, tool_name: str, args: dict, **kwargs) -> str:
         role = "subagent" if self._role == "subagent" else "main"
@@ -265,7 +205,8 @@ class IntuitionProvider(MemoryProvider):
     def _session_end_tick(self) -> None:
         try:
             from ..steward import tick as steward_tick
-            steward_tick(self._store, self._index, reason="session_end")
+            steward_tick(self._store, self._index, session_end=True,
+                         reason="session_end")
         except Exception:
             pass
 

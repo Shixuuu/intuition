@@ -3,9 +3,9 @@
 
 import json
 
-from intuition import context, inbox, safety, search as search_mod
+from intuition import context, inbox, safety
+from intuition import search as search_mod
 from intuition.adapters import hermes as hermes_mod
-from intuition.model import Fact, Record
 
 
 def test_prefix_byte_identical_across_calls(store, index):
@@ -76,6 +76,9 @@ def test_imperative_filter():
 
 def test_secure_never_in_search_or_brief(store, index):
     store.write("secure/api-keys.md", "SECRET=super-secret-value")
+    index.update()
+    indexed = {r["id"] for r in index.db.execute("SELECT id FROM docs")}
+    assert indexed == set(store.scan_records()), "the index covers the vault, never secure/"
     hits = search_mod.search(store, index, ["api keys super secret"], limit=8)
     assert not any("secure" in h.id for h in hits)
     out = search_mod.render_hits(hits)
@@ -112,7 +115,11 @@ def test_learnings_auto_accept_policy(store, index):
     batch = inbox.read_batch(store)
     kinds = {b["kind"]: b for b in batch}
     assert kinds["decision"]["text"] == "switch vendor"        # proposed → inbox
-    assert any("policy" in out and "proposed" not in out["policy"] or True for _ in [0])
+    assert kinds["procedure"]["text"] == "cite primary sources"
+    assert kinds["fact"]["source"] == "external"
+    # nothing from a learnings block reaches the vault until the Steward applies it
+    assert not [r for r in store.scan_records().values()
+                if r.type == "decision" and "vendor" in (r.id + r.name).lower()]
 
 
 def test_parallel_subagents_cannot_conflict(store, index):
@@ -127,7 +134,7 @@ def test_parallel_subagents_cannot_conflict(store, index):
     batch = inbox.read_batch(store)
     assert len(batch) == 2
     from intuition.steward.light import light_pass
-    result = light_pass(store, index, reason="test")
+    light_pass(store, index, reason="test")
     recs = store.scan_records()
     new = [r for r in recs.values()
            if r.type == "decision" and r.name.lower().startswith("use vendor")]

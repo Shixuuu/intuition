@@ -26,7 +26,9 @@ parse is the identity (unit-tested).
 
 from __future__ import annotations
 
+import calendar
 import re
+import time
 from dataclasses import dataclass, field
 
 # Record types (plan §4.2) and id prefixes.
@@ -39,9 +41,6 @@ RECORD_TYPES = {
     "workstream": "ws",
     "procedure": "proc",
 }
-PREFIX_TO_TYPE = {v: k for k, v in RECORD_TYPES.items()}
-_VALID_PREFIXES = set(RECORD_TYPES.values())
-TRUST_LEVELS = ("stated", "observed", "inferred", "external")
 
 FACTS_SECTION = "## Facts"
 LINKS_SECTION = "## Links"
@@ -98,6 +97,19 @@ def tokenise(text: str) -> list[str]:
     """Lowercase word tokens minus stopwords — miss-logging and alias checks."""
     raw = [t.strip(".,;:!?()[]\"'").lower() for t in text.split()]
     return [t for t in raw if t.isalnum() and len(t) > 1 and t not in _STOPWORDS]
+
+
+def parse_iso_ts(iso: str) -> float:
+    """Epoch seconds for the store's 'YYYY-MM-DDTHH:MM:SSZ' timestamps, else 0.0.
+
+    ``time.mktime`` reads a struct as local time, which shifts every age by the
+    machine's UTC offset; ``calendar.timegm`` reads it as the UTC instant the
+    string says it is.
+    """
+    try:
+        return calendar.timegm(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
+    except (ValueError, TypeError):
+        return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +360,7 @@ def render_record(rec: Record) -> str:
     if rec.facts:
         out += ["## Facts", *(f.line() for f in rec.facts), ""]
     if rec.links:
-        out += ["## Links", *(l.line() for l in rec.links), ""]
+        out += ["## Links", *(link.line() for link in rec.links), ""]
     text = "\n".join(out).rstrip("\n") + "\n"
     return text
 
@@ -365,7 +377,6 @@ def close_fact(rec: Record, match: str, end: str, sources: list[str]) -> bool:
                 f.validity = f"{f.validity[6:]} → {end}"
             else:
                 f.validity = f"until {end}"
-            f.end_known = True
             for s in sources:
                 if s not in f.sources:
                     f.sources.append(s)

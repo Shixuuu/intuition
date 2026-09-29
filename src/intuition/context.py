@@ -52,23 +52,30 @@ LEARNINGS_SCHEMA = {
 }
 
 
-def _token_cap(store, section: str, key: str, default: int) -> int:
+def _char_budget(store, section: str, key: str, default: int) -> int:
     return int(store.section(section, key, default))
 
 
-def observations_tail(store, max_tokens: int) -> str:
-    """Last ~7 days of the observation log, ≤ max_tokens (plan §5.1)."""
+def observations_tail(store, max_chars: int) -> str:
+    """Last ~7 days of the observation log, within *max_chars* (plan §5.1)."""
     import time
     text = store.read_text(f"observations/{time.strftime('%Y-%m')}.md")
     if not text:
         return ""
-    limit = max_tokens * 4
-    if len(text) > limit:
-        text = text[-limit:]
+    if len(text) > max_chars:
+        text = text[-max_chars:]
         nl = text.find("\n")
         if nl > 0:
             text = text[nl + 1:]
     return text
+
+
+def _capped(store, section: str, key: str, default: int, body: str) -> str:
+    """Bound a block by its character budget, marking any truncation."""
+    cap = _char_budget(store, section, key, default)
+    if len(body) <= cap:
+        return body
+    return body[:cap] + f"\n… (truncated at {section}.{key} = {cap} chars)\n"
 
 
 def index_lines(store, index, max_lines: int) -> str:
@@ -89,15 +96,20 @@ def index_lines(store, index, max_lines: int) -> str:
 
 
 def build_main_prefix(store, index) -> str:
-    """Stable prefix for the main assistant (plan §5.1)."""
+    """Stable prefix for the main assistant (plan §5.1).
+
+    Every block is bounded by a character budget, so the prefix stays a fixed
+    cost as the vault grows.
+    """
     blocks = [MAIN_CONTRACT]
-    profile = store.read_text("shared/PROFILE.md")
+    profile = _capped(store, "profile", "pinned_max_chars", 4000,
+                      store.read_text("shared/PROFILE.md"))
     if profile:
         blocks.append(profile)
     onepager = store.read_text("shared/ONEPAGER.md")
     if onepager:
         blocks.append(onepager)
-    obs = observations_tail(store, _token_cap(store, "observe", "prefix_max_tokens", 4000))
+    obs = observations_tail(store, _char_budget(store, "observe", "prefix_max_chars", 16000))
     if obs:
         blocks.append("## Recent observations\n" + obs)
     now = store.read_text("working/NOW.md")
@@ -113,7 +125,8 @@ def build_subagent_prefix(store, agent_name: str) -> str:
     """Short contract + PROFILE + own PROCEDURES (plan §5.1). Hermes children get
     this inside the brief because delegate_task skips providers (plan §14 Q1)."""
     blocks = [SUBAGENT_CONTRACT]
-    profile = store.read_text("shared/PROFILE.md")
+    profile = _capped(store, "profile", "pinned_max_chars", 4000,
+                      store.read_text("shared/PROFILE.md"))
     if profile:
         blocks.append(profile)
     procs = store.read_text(f"agents/{agent_name}/PROCEDURES.md")

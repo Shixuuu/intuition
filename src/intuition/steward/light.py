@@ -6,11 +6,16 @@ import json
 import time
 
 from .. import inbox as inbox_mod
-from .. import safety, search as search_mod
-from ..model import Fact, RECORD_TYPES, close_fact, make_id, tokenise
+from .. import safety
+from .. import search as search_mod
+from ..model import make_id
 from . import ops as ops_mod
+from . import state as state_mod
 from . import validate as validate_mod
 
+# Surfaces a person edits by hand. Everything else in the store is written by an
+# agent or by the Steward, so the manual sweep must leave those files alone.
+HAND_EDIT_PATHS = ("shared", "working", "agents")
 
 # ---------------------------------------------------------------------------
 # Planning
@@ -18,7 +23,10 @@ from . import validate as validate_mod
 
 def deterministic_plan(store, index, batch: list[dict], candidates: dict) -> dict:
     """Rule-derived plan when no model is configured (plan §6.5 fallback).
-    Trust follows the ladder mechanically; ambiguous items become observations."""
+
+    The planner proposes; the validator disposes. Nothing is dropped silently:
+    an item the rules cannot act on becomes a reject op carrying a reason.
+    """
     today = store.today()
     ops_list = []
     for item in batch:
@@ -28,40 +36,31 @@ def deterministic_plan(store, index, batch: list[dict], candidates: dict) -> dic
         about = item.get("about")
         ev = item.get("evidence", "")
         conf = item.get("confidence", 0.9)
-
-        # safety gate first (plan §6.4): imperative external text → quarantine
-        if source == "external" and safety.is_imperative(f"{text} {ev}"):
-            if store.section("safety", "quarantine_external_imperatives", True):
-                inbox_mod.quarantine(store, item, "imperative external text")
-                ops_list.append({"op": "reject", "reason": "imperative filter",
-                                 "sources": [src]})
-                continue
+        trust = safety.trust_for(source)
 
         if kind == "forget":
-            rec = store.load_record(about or "") if about else None
+            rec = store.load_record(about) if about else None
             if rec is None:
-                ops_list.append({"op": "reject", "reason": "unknown about", "sources": [src]})
+                ops_list.append({"op": "reject", "reason": "forget names no record",
+                                 "sources": [src]})
                 continue
             ops_list.append({"op": "remove_fact", "id": rec.id, "match": text,
                              "sources": [src], "evidence": ev or f"forget request {src}"})
             continue
 
-        if kind in ("preference", "decision") and source == "external":
-            inbox_mod.quarantine(store, item, "external may not create preference/decision")
-            ops_list.append({"op": "reject", "reason": "trust", "sources": [src]})
-            continue
-
         if kind == "alias":
-            rec = store.load_record(about or "") if about else None
-            if rec is not None:
-                ops_list.append({"op": "add_alias", "id": rec.id, "alias": text,
-                                 "sources": [src], "evidence": ev or text})
+            rec = store.load_record(about) if about else None
+            if rec is None:
+                ops_list.append({"op": "reject", "reason": "alias names no record",
+                                 "sources": [src]})
+                continue
+            ops_list.append({"op": "add_alias", "id": rec.id, "alias": text,
+                             "sources": [src], "evidence": ev or text})
             continue
 
         if kind == "procedure":
-            agent = item.get("agent") or "main"
-            ops_list.append({"op": "procedure_add", "agent": agent, "text": text,
-                             "sources": [src], "evidence": ev or text})
+            ops_list.append({"op": "procedure_add", "agent": item.get("agent") or "main",
+                             "text": text, "sources": [src], "evidence": ev or text})
             continue
 
         if kind == "decision":
@@ -76,9 +75,7 @@ def deterministic_plan(store, index, batch: list[dict], candidates: dict) -> dic
         if about:
             rec = candidates.get(about) or store.load_record(about)
         if rec is None:
-            hit = _best_candidate(store, index, text, about)
-            rec = hit
-        trust = safety.trust_for(source)
+            rec = _best_candidate(store, index, text, about)
         if rec is None:
             name = about or _guess_name(text)
             rtype = _guess_type(kind)
@@ -164,17 +161,23 @@ def light_pass(store, index, *, reason: str = "") -> dict:
     """plan §6.2 steps 1–9. Returns a summary dict for the caller/report."""
     started = time.time()
     result: dict = {"pass": "light", "reason": reason, "ops": 0, "committed": "",
-                    "archived": 0, "notes": [], "skipped": ""}
+                    "archived": 0, "notes": [], "skipped": "", "unapplied": [],
+                    "rejected": {}}
 
-    # 1. commit hand edits as manual
+    # 1. commit hand edits as manual; agent-written inbox and raw lines are this
+    #    run's business, not a hand edit
     if store.dirty():
-        store.commit("manual: hand edits before steward run", add_all=True)
+        store.commit("manual: hand edits before steward run", paths=HAND_EDIT_PATHS)
 
     batch = inbox_mod.read_batch(store)
     if not batch:
         result["skipped"] = "inbox empty"
-        _touch_state(store, light=True)
+        state_mod.touch(store, light=True)
         return result
+    # remember what this run planned, so a session-end pass does not re-plan it
+    _state = state_mod.load(store)
+    _state.record_attempt([item["id"] for item in batch])
+    _state.save()
 
     # 3. candidates: records the batch may touch
     candidates: dict[str, object] = {}
@@ -199,26 +202,38 @@ def light_pass(store, index, *, reason: str = "") -> dict:
             plan = deterministic_plan(store, index, batch, candidates)
     except Exception as e:                       # plan failure: batch stays, report flags
         result["error"] = f"plan failed: {e}"
-        _touch_state(store, light=True)
+        state_mod.touch(store, light=True)
         return result
 
-    # 5. validate
+    # 5. validate: reject the whole plan, then dispose only the items it named
     reasons = validate_mod.validate_plan(store, plan, batch, candidates)
     if reasons:
         result["error"] = "plan rejected: " + "; ".join(reasons[:5])
-        for item in batch:
-            if item.get("source") == "external" and any(
-                    "imperative" in r for r in reasons):
-                inbox_mod.quarantine(store, item, "imperative external text")
-        _touch_state(store, light=True)
+        blocked = validate_mod.blocked_items(batch, reasons)
+        blocked_ids = {item["id"] for item in blocked}
+        for item in blocked:
+            reason = next((r for r in reasons if f"inbox:{item['id']}" in r), reasons[0])
+            inbox_mod.quarantine(store, item, reason)
+        if blocked_ids:
+            inbox_mod.archive(store, blocked_ids)
+        result["unapplied"] = [
+            {"id": item["id"], "reason": "pending: blocked by a rejected plan"}
+            for item in batch if item["id"] not in blocked_ids]
+        state_mod.touch(store, light=True)
         return result
 
-    # 6–8. apply → validate → commit; git is the transaction
+    # 6–9. apply → validate → archive → one commit; git is the transaction
     try:
         touched, notes = ops_mod.apply_plan(store, plan, batch)
         problems = validate_mod.validate_vault(store, touched)
         if problems:
             raise ValueError("vault invalid: " + "; ".join(problems[:5]))
+        result["rejected"] = validate_mod.rejection_reasons(plan)
+        result["unapplied"] = validate_mod.unapplied_items(plan, batch)
+        # archive inside the transaction, so the inbox rewrite is part of this
+        # commit instead of landing in the next run's hand-edit sweep
+        result["archived"] = inbox_mod.archive(
+            store, validate_mod.planned_ids(plan) | set(result["rejected"]))
         detail = plan.get("summary", "")
         if notes:
             detail = (detail + "; " if detail else "") + "; ".join(notes[:6])
@@ -227,37 +242,16 @@ def light_pass(store, index, *, reason: str = "") -> dict:
         sha = store.commit(msg, add_all=True)
         result.update(ops=len(touched), committed=sha, notes=notes,
                       summary=plan.get("summary", ""))
+        index.update()
     except Exception as e:
         store.rollback()
         result["error"] = f"apply failed, rolled back: {e}"
-        _touch_state(store, light=True)
+        state_mod.touch(store, light=True)
         return result
 
-    # 9. archive + reindex (outside the transaction; safe to redo)
-    result["archived"] = inbox_mod.archive(
-        store, {item["id"] for item in batch})
-    index.update()
-    _touch_state(store, light=True)
+    state_mod.touch(store, light=True)
     result["seconds"] = round(time.time() - started, 2)
     return result
 
 
-def _touch_state(store, light: bool = False, deep: bool = False) -> None:
-    path = store.dir(".intuition/state.json")
-    state = {}
-    if path.exists():
-        try:
-            state = json.loads(path.read_text())
-        except json.JSONDecodeError:
-            state = {}
-    now = time.time()
-    if light:
-        state["last_light"] = now
-    if deep:
-        state["last_deep"] = now
-    state["last_activity"] = state.get("last_activity", now)
-    raw = store.dir("raw")
-    if raw.exists():
-        newest = max((p.stat().st_mtime for p in raw.glob("*.jsonl")), default=0)
-        state["last_activity"] = max(state.get("last_activity", 0), newest)
-    path.write_text(json.dumps(state, indent=1))
+

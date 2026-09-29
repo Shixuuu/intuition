@@ -1,17 +1,58 @@
 """Deterministic plan validation (plan §6.4) — no AI in this file.
 
-Each rule rejects a whole plan (fail closed); the light pass keeps the batch
-in the inbox so nothing is lost when a plan is rejected.
+Every plan passes through here, so the trust decision lives here rather than in
+the planner. An op's own ``source``/``kind`` fields are a claim by whoever wrote
+the plan; the cited inbox item is the evidence, and it decides. A plan that
+would turn external content into a procedure, a preference, or a decision is
+rejected whole (fail closed), and the pass disposes the items a rejection names
+while keeping the rest of the batch pending.
 """
 
 from __future__ import annotations
 
 import re
 
-from ..model import BRIEF_MAX_CHARS, MAX_RECORD_BODY, NOW_MAX_CHARS
+from ..model import MAX_RECORD_BODY, NOW_MAX_CHARS
+from ..safety import is_imperative, validate_op_safety
 from . import ops as ops_mod
 
 _URL_RE = re.compile(r"^url:")
+EXTERNAL = "external"
+# Ops that would put text in front of a future agent as an instruction.
+INSTRUCTION_OPS = ("procedure_add", "decision_propose")
+# Ops carrying user intent that only a person or the main assistant may author.
+PRIVILEGED_KINDS = ("preference", "decision")
+APPLY_OPS = tuple(n for n in ops_mod.PLAN_OPS if n not in ("noop", "reject"))
+
+
+def external_citations(op: dict, batch_index: dict[str, dict]) -> list[tuple[str, dict]]:
+    """``(source token, item)`` for every cited inbox item that came from outside.
+
+    Only these carry the trust restriction: a proposal the user or the main
+    assistant authored may create preferences, decisions, and procedures.
+    """
+    return [(str(s), batch_index[str(s)])
+            for s in op.get("sources", [])
+            if str(s) in batch_index and batch_index[str(s)].get("source") == EXTERNAL]
+
+
+def external_rejection(name: str, op: dict, item: dict) -> str | None:
+    """Why external content may not back this op, or None when it may."""
+    if name in INSTRUCTION_OPS:
+        return "may not create a procedure or a decision"
+    if name in ("create", "add_fact", "correct"):
+        kind = str(op.get("kind", ""))
+        rtype = str(op.get("type", ""))
+        if kind in PRIVILEGED_KINDS or rtype in PRIVILEGED_KINDS:
+            return "may not create a preference or a decision"
+    if op.get("trust") == "stated":
+        return "may not be recorded as stated"
+    spoken = " ".join(str(x) for x in (
+        item.get("text", ""), item.get("evidence", ""), op.get("text", ""),
+        op.get("evidence", "")))
+    if is_imperative(spoken):
+        return "hits the imperative filter"
+    return None
 
 
 def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> list[str]:
@@ -23,6 +64,7 @@ def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> lis
     if schema_err:
         return [schema_err]
 
+    batch_index = {f"inbox:{item['id']}": item for item in batch}
     # evidence index: what the cited sources actually said
     evidence_pool: dict[str, list[str]] = {}
     for item in batch:
@@ -36,7 +78,6 @@ def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> lis
             evidence_pool[f"raw:{f.stem}#{i}"] = [line]
 
     recs = store.scan_records()
-    today = store.today()
 
     for op in plan.get("ops", []):
         name = op.get("op", "")
@@ -56,16 +97,23 @@ def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> lis
                     if needle not in hay:
                         reasons.append(f"evidence: {tag} quote not found in cited source")
 
-        # Trust / imperative / secure rules
+        # Trust / imperative / secure rules against the op's declared source
         kind = op.get("kind", "")
-        source = op.get("source", "agent")
+        declared = op.get("source", "agent")
         pseudo = {"op": name if name in ("create", "add_fact") else "add_fact",
-                  "kind": kind, "source": source, "trust": op.get("trust", ""),
+                  "kind": kind, "source": declared, "trust": op.get("trust", ""),
                   "id": str(op.get("id", "")), "path": "",
                   "evidence": ev, "text": str(op.get("text", ""))}
-        safety_err = _safety(store, pseudo, kind, source)
+        safety_err = validate_op_safety(pseudo)
         if safety_err:
             reasons.append(f"{tag}: {safety_err}")
+
+        # Trust gate: the cited inbox item decides, whatever the plan declared.
+        # Every reason here names its item, so the pass can dispose exactly it.
+        for token, item in external_citations(op, batch_index):
+            why = external_rejection(name, op, item)
+            if why:
+                reasons.append(f"trust: {tag} cited {token} is external and {why}")
 
         # Id rules
         if name == "create" and op.get("id") in recs:
@@ -86,16 +134,42 @@ def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> lis
     return reasons
 
 
-def _safety(store, pseudo: dict, kind: str, source: str):
-    from ..safety import is_imperative, validate_op_safety
-    err = validate_op_safety(pseudo)
-    if err:
-        return err
-    if kind == "external" and store.section(
-            "safety", "quarantine_external_imperatives", True) \
-            and source == "external" and is_imperative(pseudo["text"] + " " + pseudo["evidence"]):
-        return "imperative filter"
-    return None
+def blocked_items(batch: list[dict], reasons: list[str]) -> list[dict]:
+    """Items a rejection names, by the ``inbox:<id>`` token its reason carries.
+
+    This is the only reader of that token format, so the contract stays in one
+    module: a rule that wants an item disposed puts its token in the reason.
+    """
+    return [item for item in batch
+            if any(f"inbox:{item['id']}" in r for r in reasons)]
+
+
+def planned_ids(plan: dict, ops: tuple[str, ...] = APPLY_OPS) -> set[str]:
+    """Inbox ids cited by ops of the given kinds."""
+    return {str(s)[len("inbox:"):]
+            for op in plan.get("ops", []) if op.get("op") in ops
+            for s in op.get("sources", []) if str(s).startswith("inbox:")}
+
+
+def rejection_reasons(plan: dict) -> dict[str, str]:
+    """Inbox id → the plan's own reason for rejecting it."""
+    out: dict[str, str] = {}
+    for op in plan.get("ops", []):
+        if op.get("op") != "reject":
+            continue
+        for s in op.get("sources", []):
+            if str(s).startswith("inbox:"):
+                out[str(s)[len("inbox:"):]] = str(op.get("reason", "rejected"))
+    return out
+
+
+def unapplied_items(plan: dict, batch: list[dict]) -> list[dict]:
+    """Proposals no op accounts for. A plan that ignores one has to say so."""
+    accounted = planned_ids(plan, tuple(ops_mod.PLAN_OPS))
+    rejected = set(rejection_reasons(plan))
+    return [{"id": item["id"], "reason": "plan produced no op for this item"}
+            for item in batch
+            if item["id"] not in accounted and item["id"] not in rejected]
 
 
 def validate_vault(store, touched: set[str]) -> list[str]:

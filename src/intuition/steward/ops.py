@@ -8,11 +8,9 @@ returns the set of touched record ids. Files are written by the light pass.
 
 from __future__ import annotations
 
-import time
+import copy
 
-from .. import inbox as inbox_mod
-from ..model import (Fact, Link, RECORD_TYPES, close_fact, make_id,
-                     parse_record, render_record)
+from ..model import LINK_RELS, RECORD_TYPES, Fact, Link, Record, close_fact, make_id
 
 PLAN_OPS = (
     "create", "add_fact", "close_fact", "correct", "add_alias", "link",
@@ -57,11 +55,21 @@ def validate_schema(plan: dict, max_ops: int) -> str | None:
 
 def apply_plan(store, plan: dict, batch: list[dict]) -> tuple[set[str], list[str]]:
     """Apply a validated plan. Returns (touched record ids, notes).
+
+    Ops mutate private copies, and the copies are written only after every op
+    has succeeded. A failure therefore leaves the process's cached view of the
+    vault untouched, and the caller's rollback leaves the files at HEAD.
     Raises on the first inconsistency; the caller rolls back the git tree."""
-    recs = store.scan_records()
+    source = store.scan_records()
     today = store.today()
+    working: dict[str, Record] = {}
     touched: set[str] = set()
     notes: list[str] = []
+
+    def copy_of(rid: str) -> Record:
+        if rid not in working:
+            working[rid] = copy.deepcopy(source[rid])
+        return working[rid]
 
     for op in plan.get("ops", []):
         name = op["op"]
@@ -75,26 +83,26 @@ def apply_plan(store, plan: dict, batch: list[dict]) -> tuple[set[str], list[str
             continue
         if name == "decision_propose":
             rid = _decision_propose(store, op, today)
-            recs[rid] = store.load_record(rid)
+            working[rid] = copy.deepcopy(store.load_record(rid))
             touched.add(rid)
             notes.append(f"decision proposed: {rid}")
             continue
 
         rid = op.get("id", "")
-        rec = recs.get(rid)
         if name == "create":
-            if rec is not None:
+            if rid in source:
                 raise ValueError(f"id: {rid} already exists")
             rtype = op.get("type", "")
             if rtype not in RECORD_TYPES:
                 raise ValueError(f"schema: unknown record type {rtype!r}")
             rec = _create_record(store, op, today)
-            recs[rec.id] = rec
+            working[rec.id] = rec
             touched.add(rec.id)
             notes.append(f"created {rec.id}")
             continue
-        if rec is None:
+        if rid not in source:
             raise ValueError(f"id: unknown record {rid!r}")
+        rec = copy_of(rid)
 
         if name == "add_fact":
             rec.facts.append(Fact(
@@ -115,9 +123,7 @@ def apply_plan(store, plan: dict, batch: list[dict]) -> tuple[set[str], list[str
                     and alias.lower() != rec.name.lower() and len(rec.aliases) < 12:
                 rec.aliases.append(alias)
         elif name == "link":
-            if op["relation"] not in (
-                    "works-at", "manages", "reports-to", "member-of", "owns",
-                    "supplies", "depends-on", "related-to", "decided-in", "supersedes"):
+            if op["relation"] not in LINK_RELS:
                 raise ValueError(f"schema: unknown link relation {op['relation']!r}")
             rec.links.append(Link(op["relation"], op["target"], op.get("validity", "")))
         elif name == "set_prose":
@@ -133,12 +139,11 @@ def apply_plan(store, plan: dict, batch: list[dict]) -> tuple[set[str], list[str
         touched.add(rid)
 
     for rid in touched:
-        store.write_record(recs[rid])
+        store.write_record(working[rid])
     return touched, notes
 
 
 def _create_record(store, op, today: str):
-    from ..model import Record
     rec = Record(
         id=op["id"], type=op["type"], name=op["name"],
         aliases=[op["alias"]] if op.get("alias") else [],
@@ -180,7 +185,6 @@ def _procedure_add(store, op) -> None:
 
 
 def _decision_propose(store, op, today: str) -> str:
-    from ..model import Record
     rid = make_id("decision", op["name"])
     rec = Record(
         id=rid, type="decision", name=op["name"], created=today, updated=today,

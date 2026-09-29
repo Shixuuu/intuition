@@ -9,11 +9,11 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, context, inbox, safety
+from . import __version__, inbox
 from .index import Index
 from .paths import default_store
-from .store import Store, StoreError
 from .steward import tick as steward_tick
+from .store import Store, StoreError
 from .tools import TOOL_HANDLERS, handle_tool_call
 
 
@@ -30,7 +30,6 @@ def _open_index(store: Store) -> Index:
 # -- commands -------------------------------------------------------------------
 
 def cmd_init(args) -> None:
-    from .paths import DIR_NAMES
     root = default_store() if not args.path else Path(args.path).expanduser()
     store = Store(str(root)) if root.exists() and (root / "intuition.toml").exists() \
         else None
@@ -159,7 +158,7 @@ def cmd_note(args) -> None:
     idx = _open_index(store)
     out = handle_tool_call(store, idx, "memory_note", {
         "text": args.text, "kind": args.kind, "about": args.about,
-        "source": "user", "evidence": args.text})
+        "source": "user", "evidence": args.text, "explicit": args.explicit})
     print(json.dumps(out))
     idx.close()
 
@@ -185,7 +184,7 @@ def cmd_undo(args) -> None:
     ref = args.run_id or "HEAD"
     subject = store.commit_message(ref)
     if not subject.startswith(("steward(", "manual:", "init:")):
-        sys.exit(f"refusing to revert {ref}: not a cairn/intuition run ({subject!r})")
+        sys.exit(f"refusing to revert {ref}: not an intuition run ({subject!r})")
     store.git("revert", "--no-edit", ref)
     print(f"reverted {ref}: {subject}")
 
@@ -286,6 +285,7 @@ def cmd_import_hermes(args) -> None:
 def cmd_install_hermes(args) -> None:
     """Directory-plugin install: copy the adapter into $HERMES_HOME/plugins."""
     import shutil
+
     import intuition
     src = Path(intuition.__file__).parent / "adapters" / "hermes_plugin"
     home = Path(args.hermes_home).expanduser()
@@ -305,21 +305,37 @@ def cmd_install_hermes(args) -> None:
 
 
 def cmd_install_pi(args) -> None:
+    """Install the Pi package: copy it, write the tool manifest, register it."""
+    import json
     import shutil
+    import subprocess
+
     import intuition
-    src = Path(intuition.__file__).parent / "adapters" / "pi_extension"
-    dst = Path(args.pi_home).expanduser() / "extensions" / "intuition"
+
+    from .tools import schemas_for
+
+    src = Path(intuition.__file__).parent / "adapters" / "pi_package"
+    dst = Path(args.pi_home).expanduser() / "intuition"
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
         shutil.rmtree(dst)
     shutil.copytree(src, dst)
-    print(f"pi extension installed at {dst}")
-    print("children get memory via briefs; agent defs optionally patched by hand")
+    manifest = dst / "extensions" / "intuition" / "tools.json"
+    manifest.write_text(json.dumps(
+        {"main": schemas_for("main"), "subagent": schemas_for("subagent")},
+        indent=1) + "\n")
+    print(f"pi package installed at {dst}")
+    pi_bin = shutil.which("pi")
+    if pi_bin:
+        done = subprocess.run([pi_bin, "install", str(dst)],
+                              capture_output=True, text=True)
+        print((done.stdout + done.stderr).strip() or f"pi install exited {done.returncode}")
+    else:
+        print(f"register it with: pi install {dst}")
 
 
 def cmd_schedule(args) -> None:
     """systemd --user timer every 15 min (Linux) or launchd (macOS) (§10.1)."""
-    import intuition
     exe = str(Path(sys.executable))
     unit = f"""\
 [Unit]
@@ -386,9 +402,16 @@ def cmd_eval(args) -> None:
     print(f"cases={len(cases)} hit@1={hits1 / n:.2f} hit@3={hits3 / n:.2f} "
           f"mrr={rr / n:.2f}")
     idx.close()
+    if hits3 != len(cases):
+        sys.exit(f"eval gate failed: hit@3 {hits3}/{len(cases)}")
 
 
 # -- entry -------------------------------------------------------------------------
+
+def cmd_rpc(args) -> None:
+    from .rpc import main as rpc_main
+    rpc_main()
+
 
 def main(argv=None) -> None:
     ap = argparse.ArgumentParser(prog="intuition", description=__doc__)
@@ -396,50 +419,98 @@ def main(argv=None) -> None:
     ap.add_argument("--version", action="version", version=__version__)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("init"); p.add_argument("path", nargs="?")
-    p.add_argument("--no-sample", action="store_true"); p.set_defaults(fn=cmd_init)
-    p = sub.add_parser("doctor"); p.set_defaults(fn=cmd_doctor)
-    p = sub.add_parser("status"); p.set_defaults(fn=cmd_status)
-    p = sub.add_parser("search"); p.add_argument("query"); p.set_defaults(fn=cmd_search)
-    p = sub.add_parser("show"); p.add_argument("id"); p.set_defaults(fn=cmd_show)
-    p = sub.add_parser("why"); p.add_argument("id"); p.set_defaults(fn=cmd_why)
-    p = sub.add_parser("note"); p.add_argument("text")
-    p.add_argument("--kind", default="fact"); p.add_argument("--about")
+    p = sub.add_parser("init")
+    p.add_argument("path", nargs="?")
+    p.add_argument("--no-sample", action="store_true")
+    p.set_defaults(fn=cmd_init)
+
+    p = sub.add_parser("doctor")
+    p.set_defaults(fn=cmd_doctor)
+
+    p = sub.add_parser("status")
+    p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("search")
+    p.add_argument("query")
+    p.set_defaults(fn=cmd_search)
+
+    p = sub.add_parser("show")
+    p.add_argument("id")
+    p.set_defaults(fn=cmd_show)
+
+    p = sub.add_parser("why")
+    p.add_argument("id")
+    p.set_defaults(fn=cmd_why)
+
+    p = sub.add_parser("note")
+    p.add_argument("text")
+    p.add_argument("--kind", default="fact")
+    p.add_argument("--about")
+    p.add_argument("--explicit", action="store_true",
+                   help="commit this on the next tick, without waiting for a batch threshold")
     p.set_defaults(fn=cmd_note)
+
     p = sub.add_parser("tick")
-    p.add_argument("--light", action="store_true"); p.add_argument("--deep", action="store_true")
-    p.add_argument("--dry-run", action="store_true"); p.add_argument("--reason")
+    p.add_argument("--light", action="store_true")
+    p.add_argument("--deep", action="store_true")
+    p.add_argument("--reason")
     p.set_defaults(fn=cmd_tick)
-    p = sub.add_parser("log"); p.add_argument("-n", type=int, default=20)
+
+    p = sub.add_parser("log")
+    p.add_argument("-n", type=int, default=20)
     p.set_defaults(fn=cmd_log)
-    p = sub.add_parser("undo"); p.add_argument("run_id", nargs="?", default="HEAD")
+
+    p = sub.add_parser("undo")
+    p.add_argument("run_id", nargs="?", default="HEAD")
     p.set_defaults(fn=cmd_undo)
-    p = sub.add_parser("reindex"); p.set_defaults(fn=cmd_reindex)
-    p = sub.add_parser("validate"); p.set_defaults(fn=cmd_validate)
-    p = sub.add_parser("review"); p.set_defaults(fn=cmd_review)
-    p = sub.add_parser("backup"); p.add_argument("--to", required=True)
+
+    p = sub.add_parser("reindex")
+    p.set_defaults(fn=cmd_reindex)
+
+    p = sub.add_parser("validate")
+    p.set_defaults(fn=cmd_validate)
+
+    p = sub.add_parser("review")
+    p.set_defaults(fn=cmd_review)
+
+    p = sub.add_parser("backup")
+    p.add_argument("--to", required=True)
     p.set_defaults(fn=cmd_backup)
-    p = sub.add_parser("purge"); p.add_argument("pattern")
-    p.add_argument("--yes", action="store_true"); p.set_defaults(fn=cmd_purge)
+
+    p = sub.add_parser("purge")
+    p.add_argument("pattern")
+    p.add_argument("--yes", action="store_true")
+    p.set_defaults(fn=cmd_purge)
+
     p = sub.add_parser("import")
     isub = p.add_subparsers(dest="what", required=True)
-    q = isub.add_parser("hermes"); q.add_argument("--hermes-home", default="~/.hermes")
+    q = isub.add_parser("hermes")
+    q.add_argument("--hermes-home", default="~/.hermes")
     q.set_defaults(fn=cmd_import_hermes)
-    q = isub.add_parser("markdown"); q.add_argument("folder")
+    q = isub.add_parser("markdown")
+    q.add_argument("folder")
     q.set_defaults(fn=cmd_import_markdown)
+
     p = sub.add_parser("install")
     psub = p.add_subparsers(dest="what", required=True)
-    q = psub.add_parser("hermes"); q.add_argument("--hermes-home", default="~/.hermes")
-    q.add_argument("--src"); q.set_defaults(fn=cmd_install_hermes)
-    q = psub.add_parser("pi"); q.add_argument("--pi-home", default="~/.pi/agent")
+    q = psub.add_parser("hermes")
+    q.add_argument("--hermes-home", default="~/.hermes")
+    q.add_argument("--src")
+    q.set_defaults(fn=cmd_install_hermes)
+    q = psub.add_parser("pi")
+    q.add_argument("--pi-home", default="~/.pi/agent")
     q.set_defaults(fn=cmd_install_pi)
-    p = sub.add_parser("schedule"); p.add_argument("--uninstall", action="store_true")
+
+    p = sub.add_parser("schedule")
+    p.add_argument("--uninstall", action="store_true")
     p.set_defaults(fn=cmd_schedule)
-    p = sub.add_parser("eval"); p.add_argument("file", nargs="?",
-                                               default="evals/retrieval.toml")
+
+    p = sub.add_parser("eval")
+    p.add_argument("file", nargs="?", default="evals/retrieval.toml")
     p.set_defaults(fn=cmd_eval)
+
     p = sub.add_parser("rpc", help="stdio JSON-lines server for the Pi extension")
-    p.set_defaults(fn=lambda a: __import__("intuition.rpc", fromlist=["rpc"]).main())
+    p.set_defaults(fn=cmd_rpc)
 
     args = ap.parse_args(argv)
     try:

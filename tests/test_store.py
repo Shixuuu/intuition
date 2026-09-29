@@ -1,8 +1,5 @@
 """Store: atomic writes, path safety, locks, git transaction (plan §9.5, §6.2)."""
 
-import json
-import os
-import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 

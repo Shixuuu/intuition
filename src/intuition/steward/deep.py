@@ -5,12 +5,11 @@ a model; observer/reflector/consolidation run only when one is configured.
 
 from __future__ import annotations
 
-import json
 import re
 import time
 
-from ..model import Fact, Record, parse_validity, render_record
-from .light import _touch_state
+from ..model import Fact, Record, parse_validity
+from . import state as state_mod
 from .light import light_pass
 
 
@@ -22,17 +21,26 @@ def deep_pass(store, index, *, reason: str = "nightly") -> dict:
     result["light"] = light_pass(store, index, reason=f"deep:{reason}")
 
     jobs = result["jobs"]
-    jobs["expire"] = expire(store)
-    jobs["aliases"] = mine_aliases(store, index)
-    jobs["dedupe"] = dedupe(store)
-    jobs["profile"] = build_onepager(store, index)
-    jobs["procedures"] = promote_procedures(store)
-    jobs["retention"] = retention(store)
-    if _model_configured(store):
-        jobs["observe"] = observe_raw(store, index)
-        jobs["condense"] = condense_log(store)
-    report(store, result, seconds=time.time() - started)
-    _touch_state(store, deep=True)
+    try:
+        jobs["expire"] = expire(store)
+        jobs["aliases"] = mine_aliases(store, index)
+        jobs["dedupe"] = dedupe(store)
+        jobs["profile"] = build_onepager(store, index)
+        jobs["procedures"] = promote_procedures(store)
+        if _model_configured(store):
+            jobs["observe"] = observe_raw(store, index)
+            jobs["condense"] = condense_log(store)
+        # retention runs last and skips capture the observer has not consumed
+        jobs["retention"] = retention(store)
+        report(store, result, seconds=time.time() - started)
+        result["committed"] = store.commit(
+            f"steward(deep): {len(jobs)} jobs [{reason}]", add_all=True)
+    except Exception as e:                     # one fault rolls back every job
+        store.rollback()
+        result["error"] = f"deep jobs failed, rolled back: {e}"
+        state_mod.touch(store, light=True)
+        return result
+    state_mod.touch(store, deep=True)
     return result
 
 
@@ -111,7 +119,7 @@ def _merge(store, keeper: Record, gone: Record) -> None:
                 and alias.lower() != keeper.name.lower():
             keeper.aliases.append(alias)
     for link in gone.links:
-        if (link.rel, link.target) not in [(l.rel, l.target) for l in keeper.links]:
+        if (link.rel, link.target) not in [(kept.rel, kept.target) for kept in keeper.links]:
             keeper.links.append(link)
     store.write_record(keeper)
     store.resolve(f"shared/{gone.type}/{gone.id}.md").unlink(missing_ok=True)
@@ -124,7 +132,7 @@ def build_onepager(store, index) -> str:
     """Regenerate ONEPAGER from #stated, #observed, #inferred ≥ 0.8 with ≥ 2
     sources (plan §6.3 profile job, §9.1). Deterministic; no model needed."""
     from ..safety import profile_fact_ok
-    max_tokens = int(store.section("profile", "generated_max_tokens", 3000))
+    cap = int(store.section("profile", "generated_max_chars", 12000))
     today = store.today()
     lines_by_type: dict[str, list[str]] = {}
     for rid, rec in sorted(store.scan_records().items()):
@@ -139,9 +147,8 @@ def build_onepager(store, index) -> str:
         if lines:
             parts.append(f"## {rtype.capitalize()}\n" + "\n".join(lines))
     text = "\n\n".join(parts) + "\n"
-    cap = max_tokens * 4
     if len(text) > cap:
-        text = text[:cap] + "\n… (truncated; raise profile.generated_max_tokens)\n"
+        text = text[:cap] + "\n… (truncated; raise profile.generated_max_chars)\n"
     store.write("shared/ONEPAGER.md", text)
     return f"{len(text)} chars"
 
@@ -155,7 +162,6 @@ def promote_procedures(store) -> list[str]:
     if not agents_dir.exists():
         return []
     for p in sorted(agents_dir.glob("*/PROCEDURES.md")):
-        agent = p.parent.name
         for line in p.read_text().splitlines():
             if line.strip().startswith("- "):
                 text = line.strip()[2:]
@@ -181,17 +187,20 @@ def promote_procedures(store) -> list[str]:
 # -- retention --------------------------------------------------------------------
 
 def retention(store) -> dict:
-    """raw > raw_days (after processing), tasks > tasks_days (plan §6.3)."""
+    """raw > raw_days once the observer consumed it, tasks > tasks_days (plan §6.3)."""
     raw_days = int(store.section("retention", "raw_days", 30))
     tasks_days = int(store.section("retention", "tasks_days", 14))
     now = time.time()
-    removed = {"raw": 0, "tasks": 0}
-    raw = store.dir("raw")
-    if raw.exists():
-        for p in raw.glob("*.jsonl"):
-            if now - p.stat().st_mtime > raw_days * 86400:
-                p.unlink()
-                removed["raw"] += 1
+    removed = {"raw": 0, "tasks": 0, "kept_unobserved": 0}
+    state = state_mod.load(store)
+    for p in state_mod.raw_files(store):
+        if now - p.stat().st_mtime <= raw_days * 86400:
+            continue
+        if p.stat().st_size > state.raw_offset(p.name):
+            removed["kept_unobserved"] += 1      # never drop capture nobody read
+            continue
+        p.unlink()
+        removed["raw"] += 1
     tasks = store.dir("tasks")
     if tasks.exists():
         for p in tasks.iterdir():
@@ -207,29 +216,29 @@ def retention(store) -> dict:
 def observe_raw(store, index) -> str:
     """Turn unprocessed raw turns into dated observations (Mastra-style)."""
     from ..llm import call_json
-    threshold = int(store.section("observe", "observer_raw_tokens", 20000))
+    threshold = int(store.section("observe", "observer_raw_chars", 80000))
     text = _unprocessed_raw(store)
-    if len(text) < threshold * 4:
+    if len(text) < threshold:
         return "below threshold"
     system = ("Turn raw conversation turns into dense dated observations. "
               "Output JSON {\"observations\": [{\"day\": \"YYYY-MM-DD\", "
               "\"priority\": \"high|med|low\", \"text\": \"…\"}]}")
     plan = call_json(store, "deep", system, text[:80000])
     n = _write_observations(store, plan.get("observations", []))
-    _mark_raw_processed(store)
+    mark_raw_observed(store)
     return f"{n} observations"
 
 
 def condense_log(store) -> str:
-    """Condense the observation log past reflector_log_tokens (plan §6.3)."""
+    """Condense the observation log past reflector_log_chars (plan §6.3)."""
     from ..llm import call_json
-    threshold = int(store.section("observe", "reflector_log_tokens", 12000))
+    threshold = int(store.section("observe", "reflector_log_chars", 48000))
     import datetime
     path = store.dir(f"observations/{datetime.date.today():%Y-%m}.md")
     if not path.exists():
         return "no log"
     text = path.read_text()
-    if len(text) < threshold * 4:
+    if len(text) < threshold:
         return "below threshold"
     system = ("Condense these observations: merge duplicates, drop low-value "
               "lines, keep every fact. Output JSON {\"condensed\": \"markdown\"}.")
@@ -262,35 +271,23 @@ def _write_observations(store, observations: list[dict]) -> int:
 
 
 def _unprocessed_raw(store) -> str:
-    state = _state(store)
-    done = state.get("raw_done_bytes", 0)
+    """Raw bytes the observer has not consumed yet, tracked per file."""
+    state = state_mod.load(store)
     chunks = []
-    raw = store.dir("raw")
-    for p in sorted(raw.glob("*.jsonl")) if raw.exists() else ():
+    for p in state_mod.raw_files(store):
         data = p.read_bytes()
+        done = state.raw_offset(p.name)
         if len(data) > done:
             chunks.append(data[done:].decode(errors="replace"))
     return "\n".join(chunks)
 
 
-def _mark_raw_processed(store) -> None:
-    total = 0
-    raw = store.dir("raw")
-    for p in raw.glob("*.jsonl") if raw.exists() else ():
-        total += p.stat().st_size
-    state = _state(store)
-    state["raw_done_bytes"] = total
-    store.dir(".intuition").joinpath("state.json").write_text(json.dumps(state, indent=1))
-
-
-def _state(store) -> dict:
-    path = store.dir(".intuition/state.json")
-    if path.exists():
-        try:
-            return json.loads(path.read_text())
-        except json.JSONDecodeError:
-            pass
-    return {}
+def mark_raw_observed(store) -> dict[str, int]:
+    """Record every raw file as fully consumed up to its current size."""
+    state = state_mod.load(store)
+    offsets = state.mark_raw_observed()
+    state.save()
+    return offsets
 
 
 def _model_configured(store) -> bool:
@@ -303,7 +300,7 @@ def _model_configured(store) -> bool:
 
 def report(store, result: dict, seconds: float) -> None:
     today = store.today()
-    zero, total = index_miss = (0, 0)
+    zero, total = 0, 0
     try:
         zero, total = _miss_rate(store)
     except Exception:
@@ -320,6 +317,11 @@ def report(store, result: dict, seconds: float) -> None:
         if job == "light":
             continue
         lines.append(f"- {job}: {out if out else '(nothing to do)'}")
+    light = result.get("light", {})
+    for item_id, why in (light.get("rejected") or {}).items():
+        lines.append(f"- rejected {item_id}: {why}")
+    for entry in light.get("unapplied") or []:
+        lines.append(f"- unapplied {entry['id']}: {entry['reason']}")
     lines += [
         f"- misses: {zero}/{total} zero-hit",
         f"- quarantine waiting: {len(_quarantine(store))}",

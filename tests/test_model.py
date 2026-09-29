@@ -1,8 +1,15 @@
 """Grammar round-trip + validity logic (plan §4.3, §11.1)."""
 
-from intuition.model import (Fact, Link, Record, close_fact, make_id,
-                             parse_record, parse_validity, render_record,
-                             validity_at, validity_contains)
+from intuition.model import (
+    Fact,
+    Link,
+    Record,
+    close_fact,
+    make_id,
+    parse_record,
+    render_record,
+    validity_contains,
+)
 
 
 def _june_record() -> Record:
@@ -38,7 +45,7 @@ def test_round_trip():
     assert again.id == "pers-june"
     assert again.aliases == ["june", "jj", "the pm"]
     assert len(again.facts) == 4
-    assert [(l.rel, l.target) for l in again.links] == [
+    assert [(link.rel, link.target) for link in again.links] == [
         ("manages", "ws-lighthouse"), ("works-at", "org-tidewater-labs")]
 
 
@@ -78,7 +85,7 @@ def test_close_fact_closes_not_deletes():
     rec = _june_record()
     assert close_fact(rec, "PM for Lighthouse", "2026-09", ["raw:2026-09-29#3"])
     f = rec.facts[0]
-    assert f.validity == "since 2026-08"[:7] + " → 2026-09"[:7] or f.validity == "2026-08 → 2026-09"
+    assert f.validity == "2026-08 → 2026-09"
     # old wording still in the file (git holds the history; the line holds the range)
     assert "PM for Lighthouse" in render_record(rec)
     assert not close_fact(rec, "PM for Mars", "2026-09", [])
@@ -120,5 +127,5 @@ def test_fact_dataclass_direct():
     f = Fact("since 2026-01", "x", "stated", ["raw:2026-01-01#1"])
     assert f.current("2026-06-01")
     assert f.line() == "- (since 2026-01) x #stated ^raw:2026-01-01#1"
-    l = Link("manages", "ws-x", "since 2026-01")
-    assert l.line() == "- manages [[ws-x]] (since 2026-01)"
+    link = Link("manages", "ws-x", "since 2026-01")
+    assert link.line() == "- manages [[ws-x]] (since 2026-01)"

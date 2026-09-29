@@ -1,7 +1,6 @@
 """Search: FTS5 stemming, alias boost, as_of, one-hop, pending, budget (§5.2)."""
 
 from intuition import search as search_mod
-from intuition.model import parse_record
 
 
 def _hits(store, index, queries, **kw):
@@ -51,6 +50,8 @@ def test_multi_query_fusion_rrf(store, index):
 def test_as_of_uses_validity(store, index):
     # May: Beacon fact, not Lighthouse; Sep: Lighthouse, not Beacon (temporal)
     may = _hits(store, index, ["june pm"], as_of="2026-05-15")
+    may_text = "\n".join(may[0].fact_lines)
+    assert "Beacon" in may_text and "Lighthouse" not in may_text
     june = store.load_record("pers-june")
     lines = "\n".join(june.fact_lines(as_of="2026-05-15"))
     assert "Beacon" in lines and "Lighthouse" not in lines

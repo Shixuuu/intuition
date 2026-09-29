@@ -10,6 +10,8 @@ from __future__ import annotations
 import time
 import uuid
 
+from .model import parse_iso_ts
+
 KINDS = ("fact", "preference", "decision", "procedure", "question",
          "correction", "forget", "alias")
 SOURCES = ("user", "agent", "external")
@@ -50,18 +52,19 @@ def read_batch(store) -> list[dict]:
 
 
 def archive(store, ids: set[str]) -> int:
-    """Move processed entries to the monthly archive. Returns count archived."""
-    items = store.read_jsonl(PENDING)
-    keep, done = [], 0
-    for item in items:
-        if item.get("id") in ids:
-            store.append_jsonl(f"inbox/archive/{item['ts'][:7]}.jsonl", item)
-            done += 1
-        else:
-            keep.append(item)
-    if done:
-        _rewrite(store, keep)
-    return done
+    """Move processed entries to the monthly archive. Returns count archived.
+
+    Copies to the archive first, then drops the ids under the append lock. A
+    crash between the two duplicates an entry in the archive instead of losing
+    it, and an entry appended by another agent mid-run stays pending.
+    """
+    if not ids:
+        return 0
+    moved = [item for item in store.read_jsonl(PENDING) if item.get("id") in ids]
+    for item in moved:
+        store.append_jsonl(f"inbox/archive/{item['ts'][:7]}.jsonl", item)
+    store.drop_jsonl_ids(PENDING, ids)
+    return len(moved)
 
 
 def quarantine(store, item: dict, reason: str) -> None:
@@ -73,19 +76,6 @@ def read_quarantine(store) -> list[dict]:
     return store.read_jsonl("review/quarantine.jsonl")
 
 
-def _rewrite(store, keep: list[dict]) -> None:
-    import json
-    p = store.resolve(PENDING)
-    tmp = p.with_suffix(".jsonl.tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        for item in keep:
-            fh.write(json.dumps(item, ensure_ascii=False) + "\n")
-        fh.flush()
-        import os
-        os.fsync(fh.fileno())
-    tmp.replace(p)
-
-
 def _new_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -94,12 +84,5 @@ def oldest_age_seconds(store) -> float:
     items = read_batch(store)
     if not items:
         return 0.0
-    ts = _parse_ts(items[0].get("ts", ""))
+    ts = parse_iso_ts(items[0].get("ts", ""))
     return max(0.0, time.time() - ts) if ts else 0.0
-
-
-def _parse_ts(iso: str) -> float:
-    try:
-        return time.mktime(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ"))
-    except (ValueError, TypeError):
-        return 0.0

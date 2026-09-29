@@ -14,11 +14,11 @@ from __future__ import annotations
 import json
 import sys
 
-from . import context, inbox, search as search_mod
+from . import context
 from .index import Index
 from .steward import tick as steward_tick
-from .tools import handle_tool_call
 from .store import Store
+from .tools import handle_tool_call
 
 
 def _prefix(store, index, params):
@@ -73,6 +73,7 @@ def dispatch(store: Store, index: Index, method: str, params: dict):
         result = steward_tick(store, index,
                               light=params.get("light", False),
                               deep=params.get("deep", False),
+                              session_end=params.get("session_end", False),
                               reason=params.get("reason", "session_end"))
         return {"tick": result}
     if method == "timeline":

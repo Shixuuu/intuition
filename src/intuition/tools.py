@@ -6,11 +6,11 @@ rest. secure_get is main-only and opt-in (plan §9.3).
 
 from __future__ import annotations
 
-import json
 import time
 
-from . import context, inbox, safety, search as search_mod
-from .model import BRIEF_MAX_CHARS, NOW_MAX_CHARS
+from . import context, inbox
+from . import search as search_mod
+from .model import NOW_MAX_CHARS
 
 
 def memory_search(store, index, args: dict) -> dict:
@@ -67,7 +67,7 @@ def memory_note(store, index, args: dict) -> dict:
         about=args.get("about"), confidence=float(args.get("confidence", 0.9)),
         host=args.get("host", "hermes"), session=args.get("session", ""),
         agent=args.get("agent", "main"),
-        explicit="remember" in args.get("text", "").lower())
+        explicit=bool(args.get("explicit")) or "remember" in args.get("text", "").lower())
     return {"ok": True, "inbox_id": entry["id"],
             "note": "pending — the Steward will confirm it"}
 
@@ -85,7 +85,6 @@ def memory_now(store, index, args: dict) -> dict:
     content = args.get("content", "").strip()
     if not content:
         return {"error": "content required"}
-    existing = store.read_text("working/NOW.md")
     header = f"# NOW — updated {store.now_iso()}\n\n"
     text = (header + content)[:NOW_MAX_CHARS]
     store.write("working/NOW.md", text)
@@ -119,9 +118,6 @@ def memory_learn(store, index, args: dict) -> dict:
         lrn = dict(lrn)
         lrn.setdefault("source", "agent")
         lrn.setdefault("confidence", 0.8)
-        # auto-accept policy (plan §7.4)
-        if lrn["kind"] == "decision":
-            lrn["_status"] = "proposed"          # subagents propose, main decides
         entry = inbox.append(
             store, kind=lrn["kind"], text=lrn["text"], source=lrn["source"],
             evidence=lrn.get("evidence", ""), about=lrn.get("about"),
@@ -173,6 +169,105 @@ TOOL_HANDLERS = {
 }
 
 SUBAGENT_TOOLS = {"memory_search", "memory_read"}
+
+
+def _s(**props) -> dict:
+    return {"type": "string", **props}
+
+
+# The one source of truth for the tool surface. The Hermes adapter reads it
+# directly, and `intuition install pi` writes it beside the Pi extension, so the
+# two hosts cannot drift apart.
+MEMORY_TOOL_SCHEMAS: dict[str, dict] = {
+    "memory_search": {
+        "description": "Search memory. Give 1-3 phrasings of your query in the user's own words.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "queries": {"type": "array", "items": {"type": "string"},
+                            "minItems": 1, "maxItems": 3},
+                "as_of": _s(description="YYYY-MM or YYYY-MM-DD, what was true then"),
+                "type": _s(description="person|org|preference|topic|decision|workstream|procedure"),
+            },
+            "required": ["queries"],
+        },
+    },
+    "memory_read": {
+        "description": "Read one full memory record by id or name.",
+        "parameters": {"type": "object", "properties": {"id_or_name": _s()},
+                       "required": ["id_or_name"]},
+    },
+    "memory_timeline": {
+        "description": "Read a daily or weekly timeline rollup.",
+        "parameters": {"type": "object", "properties": {
+            "period": _s(description="daily|weekly"), "date": _s()}},
+    },
+    "memory_note": {
+        "description": "Save a memory proposal. evidence MUST be the user's exact words.",
+        "parameters": {"type": "object", "properties": {
+            "text": _s(),
+            "kind": _s(description="fact|preference|decision|procedure|question"),
+            "about": _s(description="record id this is about, if known"),
+            "evidence": _s(), "confidence": {"type": "number"}},
+            "required": ["text", "evidence"]},
+    },
+    "memory_forget": {
+        "description": "Request removal of a memory.",
+        "parameters": {"type": "object", "properties": {
+            "about": _s(description="record id"), "text": _s(description="text to remove")},
+            "required": ["about", "text"]},
+    },
+    "memory_now": {
+        "description": "Replace working/NOW.md: your plan, open threads, task ids.",
+        "parameters": {"type": "object", "properties": {"content": _s()},
+                       "required": ["content"]},
+    },
+    "memory_brief": {
+        "description": "Build a delegation brief with decisions and relevant memory. "
+                       "Returns brief, memory_prefix and output_schema for the child.",
+        "parameters": {"type": "object", "properties": {
+            "agent": _s(), "goal": _s(), "output": _s(), "tools": _s(),
+            "boundaries": _s()},
+            "required": ["agent", "goal"]},
+    },
+    "memory_learn": {
+        "description": "Record a returning subagent's learnings (review them first).",
+        "parameters": {"type": "object", "properties": {
+            "task_id": _s(),
+            "learnings": {"type": "array", "items": {
+                "type": "object",
+                "required": ["kind", "text", "source", "evidence", "confidence"],
+                "properties": {
+                    "kind": {"enum": ["fact", "preference", "decision", "procedure", "question"]},
+                    "about": {"type": "string"}, "text": {"type": "string"},
+                    "source": {"enum": ["user", "agent", "external"]},
+                    "evidence": {"type": "string"},
+                    "confidence": {"type": "number"}}}}},
+            "required": ["task_id", "learnings"]},
+    },
+    "memory_secure_get": {
+        "description": "Read one item from the secure scope (main assistant only, opt-in).",
+        "parameters": {"type": "object", "properties": {"key": _s()},
+                       "required": ["key"]},
+    },
+    "memory_status": {
+        "description": "Inbox, records, miss rate, quarantine and the current commit.",
+        "parameters": {"type": "object", "properties": {}},
+    },
+}
+
+TOOL_ORDER = ("memory_search", "memory_read", "memory_timeline", "memory_note",
+              "memory_forget", "memory_now", "memory_brief", "memory_learn",
+              "memory_secure_get", "memory_status")
+
+
+def schemas_for(role: str) -> list[dict]:
+    """Tool definitions a role may call, in a stable order."""
+    if role == "cron":
+        return []
+    allowed = SUBAGENT_TOOLS if role == "subagent" else set(TOOL_ORDER)
+    return [{"name": name, **MEMORY_TOOL_SCHEMAS[name]}
+            for name in TOOL_ORDER if name in allowed]
 
 
 def handle_tool_call(store, index, tool_name: str, args: dict,

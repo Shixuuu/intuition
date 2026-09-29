@@ -1,13 +1,19 @@
 """Deep pass jobs without a model: expiry, dedupe, profile, retention,
 procedures promotion, reports (plan §6.3)."""
 
-import json
 import os
 import time
 
 from intuition.model import Fact, Record
-from intuition.steward.deep import (build_onepager, dedupe, expire,
-                                    promote_procedures, report, retention)
+from intuition.steward.deep import (
+    build_onepager,
+    dedupe,
+    expire,
+    mark_raw_observed,
+    promote_procedures,
+    report,
+    retention,
+)
 
 
 def _write_rec(store, rec: Record):
@@ -38,7 +44,6 @@ def test_expires_until_facts(store):
 
 
 def test_dedupe_merges_alias_overlap(store):
-    today = store.today()
     _write_rec(store, _rec(store, "topic-alpha", "topic", "Alpha",
                            aliases=["proj alpha", "alpha initiative"],
                            facts=[("since 2026-01", "alpha fact", "stated", ["raw:2026-01-01#1"])]))
@@ -56,7 +61,6 @@ def test_dedupe_merges_alias_overlap(store):
 
 
 def test_onepager_only_strong_facts(store):
-    today = store.today()
     _write_rec(store, _rec(store, "pref-plain", "preference", "Plain English",
                            facts=[("since 2026-01", "answers in plain English",
                                    "stated", ["raw:2026-01-01#1"])]))
@@ -99,6 +103,7 @@ def test_retention_deletes_old_raw_and_tasks(store):
     old_task.mkdir()
     (old_task / "brief.md").write_text("# brief\n")
     os.utime(old_task, (time.time() - 20 * 86400, time.time() - 20 * 86400))
+    mark_raw_observed(store)                     # the observer consumed this capture
     removed = retention(store)
     assert removed["raw"] == 1 and removed["tasks"] == 1
     assert not old_raw.exists() and fresh_raw.exists()

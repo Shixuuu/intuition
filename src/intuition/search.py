@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
-from .model import tokenise
+from .model import parse_iso_ts, tokenise
 
 
 @dataclass
@@ -94,7 +94,7 @@ def pending_inbox_hits(store, queries: list[str]) -> list[Hit]:
     out: list[Hit] = []
     qtokens = [set(tokenise(q)) for q in queries if q.strip()]
     for item in store.read_jsonl("inbox/pending.jsonl"):
-        ts = _ts(item.get("ts", ""))
+        ts = parse_iso_ts(item.get("ts", ""))
         if ts and ts < cutoff:
             continue
         text = f"{item.get('text', '')} {item.get('evidence', '')}".lower()
@@ -110,13 +110,6 @@ def pending_inbox_hits(store, queries: list[str]) -> list[Hit]:
 def _mentioned(text: str, item: dict) -> bool:
     about = (item.get("about") or "").lower()
     return bool(about) and about in text
-
-
-def _ts(iso: str) -> float:
-    try:
-        return time.mktime(time.strptime(iso, "%Y-%m-%dT%H:%M:%SZ")) - time.timezone
-    except (ValueError, TypeError):
-        return 0.0
 
 
 def _type_of(index, rid: str) -> str:

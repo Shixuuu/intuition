@@ -1,8 +1,6 @@
 """Plan validation rules (plan §6.4) — each rule failing and passing."""
 
-import pytest
 
-from intuition import inbox
 from intuition.steward.validate import validate_plan, validate_vault
 
 

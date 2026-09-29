@@ -8,10 +8,15 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from intuition.index import Index            # noqa: E402
-from intuition.store import Store            # noqa: E402
-from intuition.cli import (SAMPLE_DECISION, SAMPLE_JUNE, SAMPLE_ORG,  # noqa: E402
-                           SAMPLE_PROFILE, SAMPLE_WS)
+from intuition.cli import (  # noqa: E402
+    SAMPLE_DECISION,
+    SAMPLE_JUNE,
+    SAMPLE_ORG,
+    SAMPLE_PROFILE,
+    SAMPLE_WS,
+)
+from intuition.index import Index  # noqa: E402
+from intuition.store import Store  # noqa: E402
 
 
 @pytest.fixture
@@ -38,25 +43,20 @@ def index(store):
     idx.close()
 
 
-def seed_raw(store: Store, lines: list[str], day: str = "2026-09-29") -> None:
-    p = store.dir(f"raw/{day}.jsonl")
-    with open(p, "w") as fh:
-        for i, text in enumerate(lines, 1):
-            fh.write(json.dumps({
-                "ts": f"{day}T10:00:00Z", "host": "hermes", "session": "s-1",
-                "role": "user", "text": text,
-            }) + "\n")
+@pytest.fixture
+def raw_capture(store):
+    """Append raw conversation turns to raw/<day>.jsonl, as a host session does."""
+    def seed(lines: list[str], day: str = "2026-09-29") -> Path:
+        p = store.dir(f"raw/{day}.jsonl")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "a") as fh:
+            for text in lines:
+                fh.write(json.dumps({
+                    "ts": f"{day}T10:00:00Z", "host": "hermes", "session": "s-1",
+                    "role": "user", "text": text,
+                }) + "\n")
+        return p
+    return seed
 
 
-def seed_inbox(store: Store, items: list[dict]) -> None:
-    for item in items:
-        full = {
-            "id": item.get("id", f"test{i:03d}" if "i" in dir() else "test000"),
-            "ts": store.now_iso(), "host": "test", "session": "s-1",
-            "agent": item.get("agent", "main"), "task_id": None,
-            "kind": item.get("kind", "fact"), "text": item["text"],
-            "about": item.get("about"), "source": item.get("source", "user"),
-            "evidence": item.get("evidence", item["text"]),
-            "confidence": item.get("confidence", 0.9),
-        }
-        store.append_jsonl("inbox/pending.jsonl", full)
+
