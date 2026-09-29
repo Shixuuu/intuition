@@ -3,6 +3,8 @@ name = "intuition-memory"
 version = "0.1.0"
 description = "Intuition — a daily-driver agent memory: Markdown in git, FTS5 search, one Steward that writes."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = []
 
