@@ -71,13 +71,24 @@ def call_http(spec: dict, system: str, user: str) -> str:
     return body["choices"][0]["message"]["content"]
 
 
+def llm_configured(store) -> bool:
+    """True when the Steward has a model to plan with.
+
+    An empty ``[steward.llm_http]`` table does not count, so writing that table at
+    init cannot silently switch a fresh store into model mode.
+    """
+    cfg = store.cfg.get("steward", {})
+    return bool(cfg.get("llm_command_light") or cfg.get("llm_command_deep")
+                or (cfg.get("llm_http") or {}).get("url"))
+
+
 def call_json(store, which: str, system: str, user: str):
     """Call the configured model for 'light' or 'deep'; return parsed JSON.
     One retry on invalid JSON; then the caller keeps the batch unprocessed."""
     cfg = store.cfg.get("steward", {})
     cmd = cfg.get(f"llm_command_{which}") or ""
     http = cfg.get("llm_http") or {}
-    if not cmd and not http:
+    if not cmd and not (http.get("url")):
         return None                      # deterministic mode
     last_err: Exception | None = None
     for _ in range(2):                   # one retry (plan §6.5)

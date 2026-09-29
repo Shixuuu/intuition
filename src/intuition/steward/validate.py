@@ -122,7 +122,7 @@ def external_rejection(name: str, op: dict, item: dict | None = None,
 def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> list[str]:
     """Run every §6.4 rule. Returns a list of reject reasons (empty = valid)."""
     reasons: list[str] = []
-    max_ops = int(store.section("steward", "max_plan_ops", 60))
+    max_ops = int(store.section("steward", "max_plan_ops"))
 
     schema_err = ops_mod.validate_schema(plan, max_ops)
     if schema_err:

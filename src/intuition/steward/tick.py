@@ -30,20 +30,20 @@ def should_light(store) -> tuple[bool, str]:
     """plan §6.1 light triggers: any one fires."""
     from .. import inbox as inbox_mod
     batch = inbox_mod.read_batch(store)
-    if len(batch) >= int(store.section("steward", "light_inbox_items", 10)):
+    if len(batch) >= int(store.section("steward", "light_inbox_items")):
         return True, f"{len(batch)} inbox items"
     for item in batch:
         if item.get("explicit") and _age(item.get("ts", "")) > 300:
             return True, "explicit note older than 5 min"
     pending = pending_raw_bytes(store)
-    if pending >= int(store.section("steward", "light_raw_chars", 80000)):
+    if pending >= int(store.section("steward", "light_raw_chars")):
         return True, f"{pending} unobserved raw chars"
-    age_minutes = int(store.section("steward", "pending_age_minutes", 20))
+    age_minutes = int(store.section("steward", "pending_age_minutes"))
     oldest = inbox_mod.oldest_age_seconds(store) / 60.0
     if batch and age_minutes and oldest >= age_minutes:
         return True, f"oldest proposal waiting {int(oldest)} min"
     idle_min = _idle_minutes(store)
-    if 0 < idle_min and idle_min >= int(store.section("steward", "idle_minutes", 30)):
+    if 0 < idle_min and idle_min >= int(store.section("steward", "idle_minutes")):
         return True, f"idle {int(idle_min)} min after activity"
     return False, ""
 
@@ -66,7 +66,7 @@ def should_light_at_session_end(store) -> tuple[bool, str]:
 
 def should_deep(store) -> tuple[bool, str]:
     """Once per local day, after deep_time, and only when something happened."""
-    deep_time = str(store.section("steward", "deep_time", "03:00"))
+    deep_time = str(store.section("steward", "deep_time"))
     state = State(store)
     if state.data.get(LAST_DEEP_DAY) == store.today():
         return False, ""

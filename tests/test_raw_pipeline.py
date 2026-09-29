@@ -55,7 +55,7 @@ def test_retention_keeps_capture_the_observer_has_not_read(store, raw_capture):
     path = raw_capture(["capture nobody has observed"])
     old = time.time() - 40 * 86400
     os.utime(path, (old, old))
-    assert store.section("retention", "raw_days", 30) == 30
+    assert store.section("retention", "raw_days") == 30
 
     removed = retention(store)
     assert path.exists(), "unobserved capture must survive retention"

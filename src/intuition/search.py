@@ -62,12 +62,13 @@ def search(store, index, queries: list[str], rtype: str | None = None,
 
     # one-hop expansion from the top 3 (plan §5.2 step 6). The requested type
     # still applies: a hop must not widen the result set's types.
+    hop_decay = float(store.section("search", "hop_decay"))
     top = sorted(fused, key=fused.get, reverse=True)[:3]
     for src in top:
         for nb in index.neighbours(src):
             if nb in fused or (rtype and _type_of(index, nb) != rtype):
                 continue
-            fused[nb] = fused.get(src, 0.0) * 0.3
+            fused[nb] = fused.get(src, 0.0) * hop_decay
             origin.setdefault(nb, origin.get(src, ""))
             hop_via[nb] = f"hop:{src}"
 
@@ -91,7 +92,7 @@ def search(store, index, queries: list[str], rtype: str | None = None,
 
 def pending_inbox_hits(store, queries: list[str]) -> list[Hit]:
     """Grep inbox/pending.jsonl for the last pending_days days (plan §5.2 step 7)."""
-    days = int(store.section("search", "pending_days", 2))
+    days = int(store.section("search", "pending_days"))
     cutoff = time.time() - days * 86400
     out: list[Hit] = []
     qtokens = [set(tokenise(q)) for q in queries if q.strip()]
@@ -132,8 +133,8 @@ def read_after_miss(index, query: str, rid: str) -> None:
 
 def budget(store, hits: list[Hit]) -> list[Hit]:
     """Cap injection: max_records / max_chars (plan §5.2 step 8)."""
-    max_records = int(store.section("search", "max_records", 4))
-    max_chars = int(store.section("search", "max_chars", 2400))
+    max_records = int(store.section("search", "max_records"))
+    max_chars = int(store.section("search", "max_chars"))
     out, chars = [], 0
     for h in hits:
         block = "\n".join(h.fact_lines)

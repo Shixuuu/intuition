@@ -79,6 +79,27 @@ def test_rpc_bad_method_is_an_error_not_a_crash(rpc):
     assert rpc.call("ping")["result"]["pong"]
 
 
+def test_rpc_config_round_trip_over_stdio(rpc, store):
+    """The Pi command's whole path: shown, written, and readable again."""
+    shown = rpc.call("config_show")["result"]["settings"]
+    keys = {row["key"]: row for row in shown}
+    assert keys["steward.idle_minutes"]["value"] == 30
+    assert keys["steward.idle_minutes"]["overridden"] is False
+
+    written = rpc.call("config_set",
+                       {"key": "steward.idle_minutes", "value": "11"})["result"]
+    assert written == {"key": "steward.idle_minutes", "value": 11}
+    assert "idle_minutes = 11" in store.read_text("intuition.toml")
+
+    again = {row["key"]: row for row in rpc.call("config_show")["result"]["settings"]}
+    assert again["steward.idle_minutes"]["value"] == 11
+    assert again["steward.idle_minutes"]["overridden"] is True
+
+    bad = rpc.call("config_set", {"key": "steward.not_a_key", "value": "1"})
+    assert "error" in bad and "unknown setting" in bad["error"]
+    assert rpc.call("ping")["result"]["pong"] is True
+
+
 # -- triggers ------------------------------------------------------------------------
 
 def test_idle_trigger(store, index):

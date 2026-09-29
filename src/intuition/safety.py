@@ -35,12 +35,13 @@ def is_imperative(text: str) -> bool:
 
 
 def can_enter_profile(trust: str, confidence: float | None = None,
-                      n_sources: int = 1) -> bool:
-    """plan §9.1: levels 1–2 always; level 3 only if x ≥ 0.8 and ≥ 2 sources."""
+                      n_sources: int = 1,
+                      min_confidence: float = PROFILE_MIN_CONFIDENCE) -> bool:
+    """plan §9.1: levels 1–2 always; level 3 only if x ≥ min_confidence and ≥ 2 sources."""
     if trust in ("stated", "observed"):
         return True
     if trust == "inferred":
-        return (confidence or 0.0) >= PROFILE_MIN_CONFIDENCE and n_sources >= 2
+        return (confidence or 0.0) >= min_confidence and n_sources >= 2
     return False
 
 
@@ -49,8 +50,9 @@ def can_create_preference_or_decision(source: str) -> bool:
     return source in ("user", "agent") and source != "external"
 
 
-def profile_fact_ok(fact) -> bool:
-    return can_enter_profile(fact.trust, fact.confidence, len(fact.sources))
+def profile_fact_ok(fact, min_confidence: float = PROFILE_MIN_CONFIDENCE) -> bool:
+    return can_enter_profile(fact.trust, fact.confidence, len(fact.sources),
+                             min_confidence)
 
 
 def validate_op_safety(op: dict) -> str | None:

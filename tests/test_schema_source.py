@@ -81,9 +81,10 @@ def test_profile_block_is_capped(store, index):
 
 
 def test_budget_keys_name_their_unit():
-    from intuition.store import DEFAULT_CONFIG
+    from intuition.config import SETTINGS
 
-    assert "_tokens" not in DEFAULT_CONFIG
-    for key in ("pinned_max_chars", "generated_max_chars", "prefix_max_chars",
-                "observer_raw_chars", "reflector_log_chars", "light_raw_chars"):
-        assert key in DEFAULT_CONFIG
+    assert not [key for key in SETTINGS if key.endswith("_tokens")]
+    for key in ("profile.pinned_max_chars", "profile.generated_max_chars",
+                "observe.prefix_max_chars", "observe.observer_raw_chars",
+                "observe.reflector_log_chars", "steward.light_raw_chars"):
+        assert key in SETTINGS

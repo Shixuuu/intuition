@@ -16,14 +16,14 @@ import subprocess
 import tempfile
 import threading
 import time
-import tomllib
 from contextlib import contextmanager
 from pathlib import Path
 
+from . import config
 from .model import Record, parse_record, render_record
 from .paths import DIR_NAMES, GITIGNORE, resolve_store
 
-CONFIG_NAME = "intuition.toml"
+CONFIG_NAME = config.CONFIG_NAME
 STATE_DIR = ".intuition"
 # Surfaces the Steward rewrites in a run, and the subset where a run can create a
 # file that was never committed. A rollback reverts tracked changes under all of
@@ -35,47 +35,7 @@ ROLLBACK_PATHS = ("shared", "agents", "observations", "reports", "timeline")
 # report files it writes at the top of their directories. Host-written drafts live
 # one level deeper and are deliberately not matched.
 ROLLBACK_NEW_FILE_PATHS = ("shared", "agents", "observations/*.md", "reports/*.md")
-DEFAULT_CONFIG = """\
-[store]
-path = "{path}"
-
-[search]
-max_records = 4
-max_chars = 2400
-hop_decay = 0.3
-pending_days = 2
-
-[profile]
-pinned_max_chars = 4000
-generated_max_chars = 12000
-index_lines = 40
-
-[observe]
-observer_raw_chars = 80000
-reflector_log_chars = 48000
-prefix_max_chars = 16000
-
-[steward]
-tick_minutes = 15
-light_inbox_items = 10
-light_raw_chars = 80000
-pending_age_minutes = 20
-idle_minutes = 30
-deep_time = "03:00"
-llm_command_light = ""
-llm_command_deep = ""
-max_plan_ops = 60
-
-[retention]
-raw_days = 30
-tasks_days = 14
-archive_months = 12
-
-[safety]
-quarantine_external_imperatives = true
-profile_min_confidence = 0.8
-secure_enabled = false
-"""
+# The config file is generated from config.SETTINGS, the one table of keys.
 
 
 class StoreError(RuntimeError):
@@ -98,13 +58,15 @@ class Store:
     # -- config ------------------------------------------------------------
 
     def _load_config(self) -> dict:
-        f = self.root / CONFIG_NAME
-        if not f.exists():
-            return {}
-        return tomllib.loads(f.read_text())
+        return config.read(self.root / CONFIG_NAME)
 
-    def section(self, name: str, key: str, default):
-        return self.cfg.get(name, {}).get(key, default)
+    def section(self, name: str, key: str):
+        """A setting from this store's config, or its schema default.
+
+        Unknown keys raise, so a typo fails at the first read instead of
+        silently falling back to a literal.
+        """
+        return config.get_value(self.cfg, f"{name}.{key}")
 
     # -- paths -------------------------------------------------------------
 
@@ -126,7 +88,10 @@ class Store:
             self.dir(rel).mkdir(parents=True, exist_ok=True)
         cfg = self.root / CONFIG_NAME
         if not cfg.exists():
-            cfg.write_text(DEFAULT_CONFIG.format(path=self.root))
+            cfg.write_text(config.default_config_text())
+        # a store built before its config existed reads the defaults; refresh so
+        # this process sees what it just wrote
+        self.cfg = config.read(cfg)
         gi = self.root / ".gitignore"
         if not gi.exists():
             gi.write_text(GITIGNORE)

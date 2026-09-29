@@ -103,7 +103,7 @@ updated: 2026-09-01
 """)
     index.update()
     hits = search_mod.budget(store, _hits(store, index, ["topic filler commonword"], limit=10))
-    assert len(hits) <= int(store.section("search", "max_records", 4))
+    assert len(hits) <= int(store.section("search", "max_records"))
 
 
 def test_memory_tools_work_from_a_host_thread(store, index):

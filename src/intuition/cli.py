@@ -9,7 +9,8 @@ import sys
 import time
 from pathlib import Path
 
-from . import __version__, inbox
+from . import __version__, config, inbox
+from . import llm as llm_mod
 from .index import Index
 from .paths import default_store
 from .steward import tick as steward_tick
@@ -76,12 +77,11 @@ def cmd_doctor(args) -> None:
         checks.append(("store", f"{store.root} · {n} records · inbox {len(batch)} "
                        f"· quarantine {len(q)}", True))
         checks.append(("index", f"fresh={not idx.is_stale()}", True))
-        llm = store.section("steward", "llm_command_light", "") or \
-            store.cfg.get("steward", {}).get("llm_http")
-        checks.append(("steward model", llm or "not configured → deterministic mode",
-                       True))
+        mode = ("model configured" if llm_mod.llm_configured(store)
+                else "not configured → deterministic mode")
+        checks.append(("steward model", mode, True))
         checks.append(("secure scope",
-                       "enabled" if store.section("safety", "secure_enabled", False)
+                       "enabled" if store.section("safety", "secure_enabled")
                        else "disabled (recommended default)", True))
         idx.close()
     except StoreError as e:
@@ -338,9 +338,35 @@ def cmd_install_pi(args) -> None:
         print(f"register it with: pi install {dst}")
 
 
+def cmd_config(args) -> None:
+    """Show or change one setting in this store's intuition.toml."""
+    store = _open_store(args)
+    try:
+        if args.action == "show":
+            rows = config.describe(store)
+            if args.json:
+                print(json.dumps({row["key"]: row["value"] for row in rows}, indent=1))
+                return
+            for row in rows:
+                mark = "*" if row["overridden"] else " "
+                print(f"{mark} {row['key']:<34} {str(row['value']):<18} # {row['help']}")
+            print("(* changed from the default)")
+        elif args.action == "get":
+            print(config.get_value(store.cfg, args.key))
+        elif args.action == "set":
+            value = config.set_value(store, args.key, args.value)
+            print(f"{args.key} = {value!r} → {store.dir(config.CONFIG_NAME)}")
+        else:
+            print(config.settings_help(), end="")
+    except config.ConfigError as e:
+        sys.exit(f"config: {e}")
+
+
 def cmd_schedule(args) -> None:
-    """systemd --user timer every 15 min (Linux) or launchd (macOS) (§10.1)."""
+    """systemd --user timer at steward.tick_minutes (Linux) or launchd (macOS) (§10.1)."""
     exe = str(Path(sys.executable))
+    store = _open_store(args)
+    every = int(store.section("steward", "tick_minutes"))
     unit = f"""\
 [Unit]
 Description=Intuition memory steward tick
@@ -350,13 +376,13 @@ Type=oneshot
 ExecStart={exe} -m intuition.cli tick
 Environment=INTUITION_STORE={default_store()}
 """
-    timer = """\
+    timer = f"""\
 [Unit]
-Description=Intuition steward every 15 minutes
+Description=Intuition steward every {every} minutes
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=15min
+OnUnitActiveSec={every}min
 
 [Install]
 WantedBy=timers.target
@@ -377,7 +403,7 @@ WantedBy=timers.target
     subprocess.run(["bash", "-c",
                     "systemctl --user daemon-reload && "
                     "systemctl --user enable --now intuition.timer"], check=False)
-    print("systemd user timer installed: intuition.timer (every 15 min)")
+    print(f"systemd user timer installed: intuition.timer (every {every} min)")
 
 
 def cmd_eval(args) -> None:
@@ -504,6 +530,22 @@ def main(argv=None) -> None:
     q = psub.add_parser("pi")
     q.add_argument("--pi-home", default="~/.pi/agent")
     q.set_defaults(fn=cmd_install_pi)
+
+    p = sub.add_parser("config", help="show or change a setting in intuition.toml")
+    p.set_defaults(fn=cmd_config, json=False, key=None, value=None)
+    csub = p.add_subparsers(dest="action", required=True)
+    q = csub.add_parser("show")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(fn=cmd_config)
+    q = csub.add_parser("get")
+    q.add_argument("key")
+    q.set_defaults(fn=cmd_config)
+    q = csub.add_parser("set")
+    q.add_argument("key")
+    q.add_argument("value")
+    q.set_defaults(fn=cmd_config)
+    q = csub.add_parser("help")
+    q.set_defaults(fn=cmd_config)
 
     p = sub.add_parser("schedule")
     p.add_argument("--uninstall", action="store_true")

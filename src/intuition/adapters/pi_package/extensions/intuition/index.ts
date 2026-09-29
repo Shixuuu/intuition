@@ -40,6 +40,16 @@ interface Runtime {
   args: string[];
 }
 
+interface Setting {
+  key: string;
+  value: unknown;
+  default: unknown;
+  set: boolean;
+  overridden: boolean;
+  help: string;
+  kind: string;
+}
+
 interface Route {
   method: string;
   extra?: Record<string, unknown>;
@@ -148,6 +158,7 @@ const isChild = process.env.INTUITION_ROLE === "subagent";
 const agentName = process.env.INTUITION_AGENT || (isChild ? "child" : "main");
 let prefixSent = false;
 let lastPrompt = "";
+let settings: Setting[] = [];
 
 const here = typeof __dirname === "string"
   ? __dirname
@@ -215,15 +226,97 @@ function buildTool(spec: ToolSpec): any {
   });
 }
 
+function formatValue(value: unknown): string {
+  if (typeof value === "string") return value === "" ? '""' : value;
+  return String(value);
+}
+
+async function loadSettings(): Promise<Setting[]> {
+  const result = await rpc.call("config_show");
+  settings = Array.isArray(result?.settings) ? result.settings : [];
+  return settings;
+}
+
+function settingsSummary(rows: Setting[]): string {
+  if (!rows.length) return "Intuition: no settings reported";
+  const width = Math.max(...rows.map((row) => row.key.length));
+  const lines = rows.map((row) =>
+    `${row.overridden ? "*" : " "} ${row.key.padEnd(width)}  ${formatValue(row.value)}`);
+  return [
+    `Intuition settings (${rows.length}); * changed from the default`,
+    ...lines,
+    "",
+    "/intuition <key>            read one setting",
+    "/intuition <key> <value>    write one setting",
+    "/intuition help             the same list with each setting's help line",
+  ].join("\n");
+}
+
+function settingsHelp(rows: Setting[]): string {
+  return rows
+    .map((row) => `${row.key} = ${formatValue(row.value)}\n  ${row.help}`)
+    .join("\n");
+}
+
+/**
+ * Registered as a command and deliberately not as a tool: these keys include the
+ * safety knobs, so only a person at the keyboard may change them.
+ */
+function registerConfigCommand(pi: ExtensionAPI): void {
+  pi.registerCommand("intuition", {
+    description: "Show or change an Intuition setting",
+    getArgumentCompletions: (prefix: string) => {
+      const items = settings.map((row) => ({
+        value: row.key,
+        label: `${row.key} = ${formatValue(row.value)}`,
+      }));
+      const matching = items.filter((item) => item.value.startsWith(prefix.trim()));
+      return matching.length ? matching : null;
+    },
+    handler: async (args: string, ctx: any) => {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+      try {
+        if (!parts.length) {
+          const rows = settings.length ? settings : await loadSettings();
+          ctx.ui.notify(settingsSummary(rows), "info");
+          return;
+        }
+        const [key, ...rest] = parts;
+        if (key === "help") {
+          ctx.ui.notify(settingsHelp(settings.length ? settings : await loadSettings()),
+                        "info");
+          return;
+        }
+        if (!rest.length) {
+          const rows = settings.length ? settings : await loadSettings();
+          const row = rows.find((candidate) => candidate.key === key);
+          if (!row) throw new Error(`unknown setting ${key}; run /intuition for the list`);
+          ctx.ui.notify(
+            `${row.key} = ${formatValue(row.value)} (default ${formatValue(row.default)})\n` +
+            `${row.help}`, "info");
+          return;
+        }
+        const written = await rpc.call("config_set", { key, value: rest.join(" ") });
+        await loadSettings();
+        ctx.ui.notify(`${written.key} = ${formatValue(written.value)}`, "info");
+      } catch (error) {
+        ctx.ui.notify(`intuition: ${(error as Error)?.message ?? error}`, "error");
+      }
+    },
+  });
+}
+
 export default function (pi: ExtensionAPI) {
   const manifest = loadManifest();
   for (const spec of isChild ? manifest.subagent : manifest.main) {
     pi.registerTool(buildTool(spec));
   }
+  registerConfigCommand(pi);
 
   pi.on("session_start", async () => {
     prefixSent = false;
     rpc.start();
+    await loadSettings().catch(() => undefined);
   });
 
   pi.on("before_agent_start", async (event: any) => {

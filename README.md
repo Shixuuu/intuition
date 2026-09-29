@@ -54,6 +54,40 @@ intuition eval evals/retrieval.toml
 intuition backup --to /mnt/backup
 ```
 
+## Configure
+
+Every setting lives in one file, `<store>/intuition.toml`, shared by both hosts.
+The keys, their types, their defaults, and a help line each come from
+`config.SETTINGS`, so the file written at `init`, the readers, and the command
+surfaces cannot disagree.
+
+```bash
+intuition config show              # every key, current value, and help line
+intuition config show --json
+intuition config get steward.idle_minutes
+intuition config set steward.idle_minutes 30
+intuition config set search.hop_decay 0.5
+intuition config help              # the annotated list
+```
+
+In Pi, the same thing without leaving the session:
+
+```
+/intuition                          # every setting, current value, marker on changes
+/intuition steward.deep_time        # one setting, its default, and its help
+/intuition steward.deep_time 04:30  # write it; the file changes and the session reloads
+/intuition help
+```
+
+`/intuition` is a command and deliberately not a tool. The keys include the
+safety knobs (`safety.secure_enabled`, `safety.profile_min_confidence`), so only
+a person at the keyboard may change them. Tab completion after `/intuition `
+offers every key, read from the same schema.
+
+The Steward runs as its own process, so a change applies to the next tick
+immediately. A running Pi session reloads its own view on the next write and
+otherwise on the next session.
+
 ## Architecture
 
 ```
@@ -112,7 +146,7 @@ site; the values above are the same budgets in characters. If you overrode a
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q     # 113 tests
+.venv/bin/python -m pytest tests/ -q     # 136 tests
 .venv/bin/ruff check src tests           # the committed lint config
 intuition init "$TMP/memory" && intuition --store "$TMP/memory" eval evals/retrieval.toml
 ```
@@ -123,7 +157,8 @@ plan-validator rules each failing and passing, external content refused at the
 gate for procedures/preferences/decisions, fault injection in the light pass and
 in the deep jobs with the vault and the in-process view both checked, raw-pipeline
 continuity and retention, trigger consumption and session-end promptness, the
-schema single source, RPC end-to-end, and the retrieval eval gate.
+schema single source, the config writer and its command surfaces, RPC end-to-end,
+and the retrieval eval gate.
 
 CI (`.github/workflows/ci.yml`) runs the lint config, the suite, and the eval
 gate against a fresh store. Measured on this machine: **search p95 = 6 ms on a

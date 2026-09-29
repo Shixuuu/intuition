@@ -6,6 +6,7 @@ import json
 import time
 
 from .. import inbox as inbox_mod
+from .. import llm as llm_mod
 from .. import safety
 from .. import search as search_mod
 from ..model import make_id
@@ -197,8 +198,7 @@ def light_pass(store, index, *, reason: str = "") -> dict:
     # 4. plan: model or deterministic
     which = "light"
     try:
-        if store.section("steward", "llm_command_light", "") or store.cfg.get(
-                "steward", {}).get("llm_http"):
+        if llm_mod.llm_configured(store):
             plan = model_plan(store, batch, candidates, which)
         else:
             plan = deterministic_plan(store, index, batch, candidates)

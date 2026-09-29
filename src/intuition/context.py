@@ -52,8 +52,8 @@ LEARNINGS_SCHEMA = {
 }
 
 
-def _char_budget(store, section: str, key: str, default: int) -> int:
-    return int(store.section(section, key, default))
+def _char_budget(store, section: str, key: str) -> int:
+    return int(store.section(section, key))
 
 
 def observations_tail(store, max_chars: int) -> str:
@@ -70,9 +70,9 @@ def observations_tail(store, max_chars: int) -> str:
     return text
 
 
-def _capped(store, section: str, key: str, default: int, body: str) -> str:
+def _capped(store, section: str, key: str, body: str) -> str:
     """Bound a block by its character budget, marking any truncation."""
-    cap = _char_budget(store, section, key, default)
+    cap = _char_budget(store, section, key)
     if len(body) <= cap:
         return body
     return body[:cap] + f"\n… (truncated at {section}.{key} = {cap} chars)\n"
@@ -102,20 +102,20 @@ def build_main_prefix(store, index) -> str:
     cost as the vault grows.
     """
     blocks = [MAIN_CONTRACT]
-    profile = _capped(store, "profile", "pinned_max_chars", 4000,
+    profile = _capped(store, "profile", "pinned_max_chars",
                       store.read_text("shared/PROFILE.md"))
     if profile:
         blocks.append(profile)
     onepager = store.read_text("shared/ONEPAGER.md")
     if onepager:
         blocks.append(onepager)
-    obs = observations_tail(store, _char_budget(store, "observe", "prefix_max_chars", 16000))
+    obs = observations_tail(store, _char_budget(store, "observe", "prefix_max_chars"))
     if obs:
         blocks.append("## Recent observations\n" + obs)
     now = store.read_text("working/NOW.md")
     if now:
         blocks.append("## Working state (NOW)\n" + now)
-    lines = index_lines(store, index, int(store.section("profile", "index_lines", 40)))
+    lines = index_lines(store, index, int(store.section("profile", "index_lines")))
     if lines:
         blocks.append("## Memory index\n" + lines)
     return "\n\n".join(b.rstrip() + "\n" for b in blocks)
@@ -125,7 +125,7 @@ def build_subagent_prefix(store, agent_name: str) -> str:
     """Short contract + PROFILE + own PROCEDURES (plan §5.1). Hermes children get
     this inside the brief because delegate_task skips providers (plan §14 Q1)."""
     blocks = [SUBAGENT_CONTRACT]
-    profile = _capped(store, "profile", "pinned_max_chars", 4000,
+    profile = _capped(store, "profile", "pinned_max_chars",
                       store.read_text("shared/PROFILE.md"))
     if profile:
         blocks.append(profile)

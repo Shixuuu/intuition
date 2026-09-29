@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import sys
 
-from . import context
+from . import config, context
 from .index import Index
 from .steward import tick as steward_tick
 from .store import Store
@@ -76,6 +76,13 @@ def dispatch(store: Store, index: Index, method: str, params: dict):
                               session_end=params.get("session_end", False),
                               reason=params.get("reason", "session_end"))
         return {"tick": result}
+    if method == "config_show":
+        return {"settings": config.describe(store)}
+    if method == "config_set":
+        value = config.set_value(store, params["key"], params["value"])
+        return {"key": params["key"], "value": value}
+    if method == "config_help":
+        return {"text": config.settings_help()}
     if method == "timeline":
         return handle_tool_call(store, index, "memory_timeline", params)
     if method == "note":

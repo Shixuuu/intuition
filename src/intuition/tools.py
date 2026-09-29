@@ -133,7 +133,7 @@ def memory_learn(store, index, args: dict) -> dict:
 
 
 def memory_secure_get(store, index, args: dict) -> dict:
-    if not store.section("safety", "secure_enabled", False):
+    if not store.section("safety", "secure_enabled"):
         return {"error": "secure disabled in intuition.toml [safety] secure_enabled"}
     key = args.get("key", "")
     if not key or "/" in key or ".." in key:
