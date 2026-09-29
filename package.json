@@ -1,6 +1,6 @@
 {
   "name": "intuition-pi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Intuition memory for Pi: search, notes, and the Steward's settings, backed by Markdown in git",
   "license": "MIT",
   "keywords": [

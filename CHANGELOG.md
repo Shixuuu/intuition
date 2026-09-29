@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1
+
+- Carry the SPDX license expression and the project URLs in the published
+  metadata, so PyPI shows the license and links back to the repository.
+- Add `repository`, `homepage`, `bugs`, and a gallery preview image
+  (`pi.image`) to the Pi package, so the listing on the Pi package gallery shows
+  the screenshot and the source.
+- Document the gallery listing and how to publish both artifacts.
+
+
 ## 0.1.0
 
 First release.
