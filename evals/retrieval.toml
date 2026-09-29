@@ -1,0 +1,30 @@
+# Retrieval eval (plan §11.2). Gate: no regression > 2 points.
+# Run: intuition eval evals/retrieval.toml
+
+[[case]]
+query = "who is the PM for Lighthouse"
+expect = ["pers-june"]
+
+[[case]]
+query = "june"
+expect = ["pers-june"]
+
+[[case]]
+query = "who manages lighthouse"
+expect = ["pers-june", "ws-lighthouse"]
+
+[[case]]
+query = "meetings june runs"
+expect = ["pers-june"]
+
+[[case]]
+query = "when is the lighthouse launch"
+expect = ["ws-lighthouse"]
+
+[[case]]
+query = "what search engine did we pick"
+expect = ["dec-use-fts5"]
+
+[[case]]
+query = "no vectors decision"
+expect = ["dec-use-fts5"]

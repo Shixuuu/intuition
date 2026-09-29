@@ -1,0 +1,341 @@
+"""Deep pass (plan §6.3): everything in light + condense, profile, aliases,
+expiry, dedupe, procedures, retention, report. Deterministic jobs run without
+a model; observer/reflector/consolidation run only when one is configured.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+
+from ..model import Fact, Record, parse_validity, render_record
+from .light import _touch_state
+from .light import light_pass
+
+
+def deep_pass(store, index, *, reason: str = "nightly") -> dict:
+    started = time.time()
+    result: dict = {"pass": "deep", "reason": reason, "jobs": {}}
+
+    # light work first so the day's inbox is in the vault before condensing
+    result["light"] = light_pass(store, index, reason=f"deep:{reason}")
+
+    jobs = result["jobs"]
+    jobs["expire"] = expire(store)
+    jobs["aliases"] = mine_aliases(store, index)
+    jobs["dedupe"] = dedupe(store)
+    jobs["profile"] = build_onepager(store, index)
+    jobs["procedures"] = promote_procedures(store)
+    jobs["retention"] = retention(store)
+    if _model_configured(store):
+        jobs["observe"] = observe_raw(store, index)
+        jobs["condense"] = condense_log(store)
+    report(store, result, seconds=time.time() - started)
+    _touch_state(store, deep=True)
+    return result
+
+
+# -- expiry (Zep validity) ----------------------------------------------------
+
+def expire(store) -> list[str]:
+    """Remove facts whose `until` date passed (plan §4.3, §6.3)."""
+    today = store.today()
+    removed = []
+    for rid, rec in store.scan_records().items():
+        keep = []
+        for f in rec.facts:
+            v = parse_validity(f.validity)
+            if not v.point and v.end and today > v.end:
+                removed.append(f"{rid}: {f.text[:60]}")
+                continue
+            keep.append(f)
+        if len(keep) != len(rec.facts):
+            rec.facts = keep
+            store.write_record(rec)
+    return removed
+
+
+# -- alias mining --------------------------------------------------------------
+
+def mine_aliases(store, index) -> list[str]:
+    """Strong miss→read pairs become aliases (plan §6.3; ≥2 occurrences without
+    a model to agree — 1 + model agreement when one is configured)."""
+    min_occ = 1 if _model_configured(store) else 2
+    added = []
+    for query, rid, n in index.alias_candidates():
+        if n < min_occ:
+            continue
+        rec = store.load_record(rid)
+        if rec is None or len(rec.aliases) >= 12:
+            continue
+        alias = query.strip()
+        if alias and alias.lower() not in (a.lower() for a in rec.aliases) \
+                and alias.lower() != rec.name.lower():
+            rec.aliases.append(alias[:48])
+            store.write_record(rec)
+            added.append(f"{alias} → {rid}")
+    index.db.execute("DELETE FROM misses WHERE found_id != ''")
+    index.db.commit()
+    return added
+
+
+# -- dedupe (Mem0-style merge, keep one id) ------------------------------------
+
+def dedupe(store) -> list[str]:
+    recs = store.scan_records()
+    merged = []
+    seen: set[str] = set()
+    ids = sorted(recs)
+    for i, a in enumerate(ids):
+        if a in seen:
+            continue
+        for b in ids[i + 1:]:
+            if b in seen:
+                continue
+            ra, rb = recs[a], recs[b]
+            if ra.type != rb.type:
+                continue
+            overlap = {x.casefold() for x in ra.aliases} & {x.casefold() for x in rb.aliases}
+            if len(overlap) >= 2:
+                _merge(store, ra, rb)
+                seen.add(b)
+                merged.append(f"{b} → {a}")
+    return merged
+
+
+def _merge(store, keeper: Record, gone: Record) -> None:
+    keeper.facts.extend(gone.facts)
+    for alias in gone.aliases + [gone.name]:
+        if alias.lower() not in {a.lower() for a in keeper.aliases} \
+                and alias.lower() != keeper.name.lower():
+            keeper.aliases.append(alias)
+    for link in gone.links:
+        if (link.rel, link.target) not in [(l.rel, l.target) for l in keeper.links]:
+            keeper.links.append(link)
+    store.write_record(keeper)
+    store.resolve(f"shared/{gone.type}/{gone.id}.md").unlink(missing_ok=True)
+    store.invalidate_record_cache()
+
+
+# -- profile (ONEPAGER) ---------------------------------------------------------
+
+def build_onepager(store, index) -> str:
+    """Regenerate ONEPAGER from #stated, #observed, #inferred ≥ 0.8 with ≥ 2
+    sources (plan §6.3 profile job, §9.1). Deterministic; no model needed."""
+    from ..safety import profile_fact_ok
+    max_tokens = int(store.section("profile", "generated_max_tokens", 3000))
+    today = store.today()
+    lines_by_type: dict[str, list[str]] = {}
+    for rid, rec in sorted(store.scan_records().items()):
+        for f in rec.current_facts(today):
+            if profile_fact_ok(f):
+                lines_by_type.setdefault(rec.type, []).append(
+                    f"- {rec.name} ({rid}): {f.text} [{f.trust}]")
+    parts = ["# One-pager (generated by the Steward — do not hand-edit)\n"]
+    for rtype in ("preference", "person", "org", "workstream", "decision",
+                  "procedure", "topic"):
+        lines = lines_by_type.get(rtype, [])
+        if lines:
+            parts.append(f"## {rtype.capitalize()}\n" + "\n".join(lines))
+    text = "\n\n".join(parts) + "\n"
+    cap = max_tokens * 4
+    if len(text) > cap:
+        text = text[:cap] + "\n… (truncated; raise profile.generated_max_tokens)\n"
+    store.write("shared/ONEPAGER.md", text)
+    return f"{len(text)} chars"
+
+
+# -- procedures promotion --------------------------------------------------------
+
+def promote_procedures(store) -> list[str]:
+    """A lesson found by two or more specialists moves to shared/procedure (§4.6)."""
+    counts: dict[str, tuple[int, str]] = {}
+    agents_dir = store.dir("agents")
+    if not agents_dir.exists():
+        return []
+    for p in sorted(agents_dir.glob("*/PROCEDURES.md")):
+        agent = p.parent.name
+        for line in p.read_text().splitlines():
+            if line.strip().startswith("- "):
+                text = line.strip()[2:]
+                key = re.sub(r"\W+", " ", text.casefold()).strip()
+                n, _ = counts.get(key, (0, ""))
+                counts[key] = (n + 1, text)
+    promoted = []
+    for key, (n, text) in counts.items():
+        if n < 2:
+            continue
+        rid = f"proc-{abs(hash(key)) % 10**8:08d}"
+        if store.load_record(rid) is None:
+            today = store.today()
+            rec = Record(id=rid, type="procedure",
+                         name=text[:60], created=today, updated=today,
+                         facts=[Fact(validity=f"since {today[:7]}", text=text,
+                                     trust="observed", sources=["tasks:promotion"])])
+            store.write_record(rec)
+            promoted.append(rid)
+    return promoted
+
+
+# -- retention --------------------------------------------------------------------
+
+def retention(store) -> dict:
+    """raw > raw_days (after processing), tasks > tasks_days (plan §6.3)."""
+    raw_days = int(store.section("retention", "raw_days", 30))
+    tasks_days = int(store.section("retention", "tasks_days", 14))
+    now = time.time()
+    removed = {"raw": 0, "tasks": 0}
+    raw = store.dir("raw")
+    if raw.exists():
+        for p in raw.glob("*.jsonl"):
+            if now - p.stat().st_mtime > raw_days * 86400:
+                p.unlink()
+                removed["raw"] += 1
+    tasks = store.dir("tasks")
+    if tasks.exists():
+        for p in tasks.iterdir():
+            if p.is_dir() and now - p.stat().st_mtime > tasks_days * 86400:
+                import shutil
+                shutil.rmtree(p, ignore_errors=True)
+                removed["tasks"] += 1
+    return removed
+
+
+# -- observer / reflector (model-mode only) ----------------------------------------
+
+def observe_raw(store, index) -> str:
+    """Turn unprocessed raw turns into dated observations (Mastra-style)."""
+    from ..llm import call_json
+    threshold = int(store.section("observe", "observer_raw_tokens", 20000))
+    text = _unprocessed_raw(store)
+    if len(text) < threshold * 4:
+        return "below threshold"
+    system = ("Turn raw conversation turns into dense dated observations. "
+              "Output JSON {\"observations\": [{\"day\": \"YYYY-MM-DD\", "
+              "\"priority\": \"high|med|low\", \"text\": \"…\"}]}")
+    plan = call_json(store, "deep", system, text[:80000])
+    n = _write_observations(store, plan.get("observations", []))
+    _mark_raw_processed(store)
+    return f"{n} observations"
+
+
+def condense_log(store) -> str:
+    """Condense the observation log past reflector_log_tokens (plan §6.3)."""
+    from ..llm import call_json
+    threshold = int(store.section("observe", "reflector_log_tokens", 12000))
+    import datetime
+    path = store.dir(f"observations/{datetime.date.today():%Y-%m}.md")
+    if not path.exists():
+        return "no log"
+    text = path.read_text()
+    if len(text) < threshold * 4:
+        return "below threshold"
+    system = ("Condense these observations: merge duplicates, drop low-value "
+              "lines, keep every fact. Output JSON {\"condensed\": \"markdown\"}.")
+    plan = call_json(store, "deep", system, text[:80000])
+    if plan.get("condensed"):
+        archive = store.dir(f"inbox/archive/obs-{datetime.date.today():%Y-%m}.md")
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        archive.write_text(text)                      # old wording stays in git too
+        path.write_text(plan["condensed"])
+        return "condensed"
+    return "model returned nothing"
+
+
+def _write_observations(store, observations: list[dict]) -> int:
+    today = store.today()
+    path = f"observations/{today[:7]}.md"
+    text = store.read_text(path)
+    for obs in observations:
+        line = f"- [{obs.get('priority', 'med')}] {obs.get('text', '')}"
+        day = obs.get("day", today)
+        header = f"## {day}"
+        if header not in text:
+            text = f"{text.rstrip()}\n\n{header}\n{line}\n" if text else f"{header}\n{line}\n"
+        else:
+            head, _, rest = text.partition(header)
+            text = f"{head}{header}\n{line}\n{rest}"
+    if observations:
+        store.write(path, text)
+    return len(observations)
+
+
+def _unprocessed_raw(store) -> str:
+    state = _state(store)
+    done = state.get("raw_done_bytes", 0)
+    chunks = []
+    raw = store.dir("raw")
+    for p in sorted(raw.glob("*.jsonl")) if raw.exists() else ():
+        data = p.read_bytes()
+        if len(data) > done:
+            chunks.append(data[done:].decode(errors="replace"))
+    return "\n".join(chunks)
+
+
+def _mark_raw_processed(store) -> None:
+    total = 0
+    raw = store.dir("raw")
+    for p in raw.glob("*.jsonl") if raw.exists() else ():
+        total += p.stat().st_size
+    state = _state(store)
+    state["raw_done_bytes"] = total
+    store.dir(".intuition").joinpath("state.json").write_text(json.dumps(state, indent=1))
+
+
+def _state(store) -> dict:
+    path = store.dir(".intuition/state.json")
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def _model_configured(store) -> bool:
+    s = store.cfg.get("steward", {})
+    return bool(s.get("llm_command_light") or s.get("llm_command_deep")
+                or s.get("llm_http"))
+
+
+# -- report -------------------------------------------------------------------------
+
+def report(store, result: dict, seconds: float) -> None:
+    today = store.today()
+    zero, total = index_miss = (0, 0)
+    try:
+        zero, total = _miss_rate(store)
+    except Exception:
+        pass
+    lines = [
+        f"# Steward report — {today}",
+        "",
+        f"- run: {result.get('pass')} ({result.get('reason')}), {seconds:.1f}s",
+        f"- light result: ops={result['light'].get('ops', 0)} "
+        f"committed={result['light'].get('committed', '') or '(nothing)'}",
+        f"- errors: {result['light'].get('error', 'none')}",
+    ]
+    for job, out in result.get("jobs", {}).items():
+        if job == "light":
+            continue
+        lines.append(f"- {job}: {out if out else '(nothing to do)'}")
+    lines += [
+        f"- misses: {zero}/{total} zero-hit",
+        f"- quarantine waiting: {len(_quarantine(store))}",
+        f"- store size: {sum(1 for _ in store.dir('shared').rglob('*.md'))} records",
+    ]
+    store.write(f"reports/{today}.md", "\n".join(lines) + "\n")
+
+
+def _miss_rate(store):
+    import sqlite3
+    db = sqlite3.connect(store.dir(".intuition/index.sqlite"))
+    total = db.execute("SELECT COUNT(*) FROM misses").fetchone()[0]
+    zero = db.execute("SELECT COUNT(*) FROM misses WHERE found_id=''").fetchone()[0]
+    db.close()
+    return zero, total
+
+
+def _quarantine(store):
+    return store.read_jsonl("review/quarantine.jsonl")
