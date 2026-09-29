@@ -25,8 +25,10 @@ AUTHORED_OPS = ("procedure_add", "decision_propose", "set_prose", "add_alias",
 EXTERNAL_OPS = ("add_fact", "create")
 # Kinds that become durable instruction or profile text.
 PROTECTED_KINDS = ("preference", "decision", "procedure")
-# Ops carrying text that a future agent reads as an instruction.
-INSTRUCTION_OPS = ("procedure_add", "decision_propose")
+# Ops carrying text that a future agent reads as an instruction, a profile line,
+# a record's prose, or an alias. Their text must come from the item they cite.
+CONTENT_OPS = ("procedure_add", "decision_propose", "set_prose", "observe",
+               "correct", "add_alias")
 APPLY_OPS = tuple(n for n in ops_mod.PLAN_OPS if n not in ("noop", "reject"))
 
 
@@ -65,9 +67,14 @@ def needs_local_citation(name: str, op: dict) -> bool:
     return name in AUTHORED_OPS or protected_kind(op) is not None
 
 
+def op_text(op: dict) -> str:
+    """The field that carries this op's content, if it has one."""
+    return str(op.get("text") or op.get("alias") or "").strip()
+
+
 def text_is_cited(op: dict, batch_index: dict[str, dict]) -> bool:
     """True when the op's text appears in one of the items it cites."""
-    text = str(op.get("text", "")).strip().casefold()
+    text = op_text(op).casefold()
     if not text:
         return False
     for _token, item in cited_items(op, batch_index):
@@ -77,13 +84,18 @@ def text_is_cited(op: dict, batch_index: dict[str, dict]) -> bool:
     return False
 
 
+def needs_cited_text(name: str, op: dict) -> bool:
+    return name in CONTENT_OPS or protected_kind(op) is not None
+
+
 def cited_items(op: dict, batch_index: dict[str, dict]) -> list[tuple[str, dict]]:
     """``(source token, item)`` for every inbox item the op cites."""
     return [(str(s), batch_index[str(s)]) for s in op.get("sources", [])
             if str(s) in batch_index]
 
 
-def external_rejection(name: str, op: dict, item: dict | None = None) -> str | None:
+def external_rejection(name: str, op: dict, item: dict | None = None,
+                       batch_index: dict[str, dict] | None = None) -> str | None:
     """Why external content may not back this op, or None when it may."""
     if name not in EXTERNAL_OPS:
         return "may only add a fact or a new record"
@@ -92,6 +104,13 @@ def external_rejection(name: str, op: dict, item: dict | None = None) -> str | N
         return f"may not create a {kind}"
     if str(op.get("trust", "")).casefold() != EXTERNAL:
         return "enters as #external only"
+    for fact in op.get("facts") or []:
+        if str(fact.get("trust", "")).casefold() != EXTERNAL:
+            return "may not store a nested fact under a stronger tag"
+        if batch_index is not None and not text_is_cited(
+                {"text": fact.get("text", ""), "sources": op.get("sources", [])},
+                batch_index):
+            return "may not store a nested fact the cited source never said"
     spoken = " ".join(str(x) for x in (
         op.get("text", ""), op.get("evidence", ""),
         (item or {}).get("text", ""), (item or {}).get("evidence", "")))
@@ -158,15 +177,14 @@ def validate_plan(store, plan: dict, batch: list[dict], candidates: dict) -> lis
         trust = citation_trust(op, batch_index)
         if trust == EXTERNAL:
             for token, item in external_citations(op, batch_index):
-                why = external_rejection(name, op, item)
+                why = external_rejection(name, op, item, batch_index)
                 if why:
                     reasons.append(f"trust: {tag} cited {token} is external and {why}")
         elif needs_local_citation(name, op):
             if trust != "local":
                 reasons.append(
                     f"trust: {tag} needs a citation from the user or the main assistant")
-            elif (name in INSTRUCTION_OPS or protected_kind(op)) and \
-                    not text_is_cited(op, batch_index):
+            elif needs_cited_text(name, op) and not text_is_cited(op, batch_index):
                 reasons.append(f"evidence: {tag} text is not in the cited item")
 
         # Id rules

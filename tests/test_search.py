@@ -144,6 +144,9 @@ def test_memory_tools_work_from_a_host_thread(store, index):
     assert not errors, errors
     assert any(r["id"] == "pers-june"
                for outcome in outcomes for r in outcome.get("records", []))
+    typed = [outcome for outcome in outcomes if outcome.get("records")
+             and all(r["id"].startswith("pers-") for r in outcome["records"])]
+    assert typed, "the type-filtered query must come back holding only people"
     assert any(outcome.get("id") == "pers-june" for outcome in outcomes)
     index.record_usage("pers-june")               # write path from this thread too
 

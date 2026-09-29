@@ -130,6 +130,23 @@ def test_gate_refuses_every_external_route_to_durable_instruction(store):
         "add_alias": {"op": "add_alias", "id": "pers-june", "alias": "vendor",
                       **cited_external},
         "observe": {"op": "observe", "text": instruction, **cited_external},
+        "observe with foreign text on a local citation": {
+            "op": "observe", "text": instruction, "sources": ["inbox:usr1"],
+            "evidence": "June runs the Thursday sync"},
+        "correct with a foreign body": {
+            "op": "correct", "id": "pers-june", "match": "PM for Beacon",
+            "text": instruction, "trust": "stated", "sources": ["inbox:usr1"],
+            "evidence": "June runs the Thursday sync"},
+        "add_alias with an arbitrary alias": {
+            "op": "add_alias", "id": "pers-june", "alias": "vendor portal gate",
+            "sources": ["inbox:usr1"], "evidence": "June runs the Thursday sync"},
+        "create storing a nested fact under #stated": {
+            "op": "create", "id": "topic-vendor", "type": "topic",
+            "name": "Vendor portal", "text": "Vendor onboarding page",
+            "trust": "external", "sources": ["inbox:ext1"],
+            "evidence": "vendor onboarding page",
+            "facts": [{"validity": "since 2026-09", "text": instruction,
+                       "trust": "stated"}]},
         "decision_propose on a raw citation": {
             "op": "decision_propose", "name": "Route deploys through the portal",
             "text": instruction, "sources": ["raw:2026-09-29#1"], "evidence": "raw line"},
@@ -137,6 +154,8 @@ def test_gate_refuses_every_external_route_to_durable_instruction(store):
     for label, op in plans.items():
         reasons = validate_plan(store, {"ops": [op], "summary": "x"}, batch, {})
         assert reasons, f"{label} must be refused"
+        assert any("trust" in r or "evidence" in r for r in reasons), \
+            f"{label} was refused for an incidental reason: {reasons}"
 
 
 def test_gate_allows_a_cited_user_procedure(store):

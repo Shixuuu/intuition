@@ -72,7 +72,9 @@ def should_deep(store) -> tuple[bool, str]:
         return False, ""
     if time.strftime("%H:%M") < deep_time:
         return False, ""
-    if state.time_of(LAST_DEEP) >= state.time_of(LAST_ACTIVITY) > 0:
+    # raw capture written since the last pass counts as activity too
+    activity = max(state.time_of(LAST_ACTIVITY), newest_raw_mtime(store))
+    if state.time_of(LAST_DEEP) >= activity > 0:
         return False, ""
     return True, f"past deep_time {deep_time}"
 

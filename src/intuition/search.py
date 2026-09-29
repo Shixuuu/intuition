@@ -60,14 +60,16 @@ def search(store, index, queries: list[str], rtype: str | None = None,
         fused = {rid: s for rid, s in fused.items()
                  if _type_of(index, rid) == rtype}
 
-    # one-hop expansion from the top 3 (plan §5.2 step 6)
+    # one-hop expansion from the top 3 (plan §5.2 step 6). The requested type
+    # still applies: a hop must not widen the result set's types.
     top = sorted(fused, key=fused.get, reverse=True)[:3]
     for src in top:
         for nb in index.neighbours(src):
-            if nb not in fused:
-                fused[nb] = fused.get(src, 0.0) * 0.3
-                origin.setdefault(nb, origin.get(src, ""))
-                hop_via[nb] = f"hop:{src}"
+            if nb in fused or (rtype and _type_of(index, nb) != rtype):
+                continue
+            fused[nb] = fused.get(src, 0.0) * 0.3
+            origin.setdefault(nb, origin.get(src, ""))
+            hop_via[nb] = f"hop:{src}"
 
     hits: list[Hit] = []
     for rid, score in sorted(fused.items(), key=lambda kv: kv[1], reverse=True):

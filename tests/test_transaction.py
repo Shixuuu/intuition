@@ -6,6 +6,9 @@ records, so a rollback that only fixes the files but not the in-process record
 cache would still fail here.
 """
 
+import os
+import time
+
 import pytest
 
 from intuition import inbox
@@ -109,6 +112,77 @@ updated: 2026-01-01
     assert not store.dirty(), "the process's view matches HEAD"
     rec = store.load_record("topic-expiring")
     assert [f for f in rec.facts if "expired" in f.text], "the fact is back"
+
+
+def test_light_fault_after_the_archive_restores_the_proposals(store, index, monkeypatch):
+    """The archive step removes proposals from the queue inside the transaction;
+    a failure after it must put them back, or a run that applied nothing would
+    have consumed them."""
+    entry = inbox.append(store, kind="fact", source="user", text="June runs the sync",
+                         evidence="June runs the sync", about="pers-june")
+
+    real_commit = store.commit
+
+    def no_steward_commit(msg, *args, **kwargs):
+        if msg.startswith("steward("):
+            raise ValueError("injected commit failure")
+        return real_commit(msg, *args, **kwargs)
+
+    monkeypatch.setattr(store, "commit", no_steward_commit)
+    result = _run(store, index)
+
+    assert "rolled back" in result["error"]
+    pending = {item["id"] for item in inbox.read_batch(store)}
+    assert entry["id"] in pending, "the proposal is back in the queue"
+    assert not store.git("status", "--porcelain", "--", "shared").strip()
+
+
+def test_deep_fault_keeps_unobserved_raw_and_drops_new_observations(store, index,
+                                                                    raw_capture,
+                                                                    monkeypatch):
+    """Retention may not delete capture the observer never read, and a failed run
+    may not leave a fresh observation file behind for the prefix to pick up."""
+    path = raw_capture(["a committed turn"], day="2026-01-01")
+    store.commit("seed raw", add_all=True)
+    deep_mod.mark_raw_observed(store)
+    raw_capture(["appended after the last commit"], day="2026-01-01")
+    old = time.time() - 40 * 86400
+    os.utime(path, (old, old))
+
+    def boom(*a, **kw):
+        raise ValueError("injected after retention")
+
+    monkeypatch.setattr(deep_mod, "report", boom)
+    result = deep_pass(store, index, reason="transaction")
+
+    assert "rolled back" in result["error"]
+    text = path.read_text()
+    assert "a committed turn" in text, "the deleted capture came back"
+    assert "appended after the last commit" in text, \
+        "a rollback must never revert raw capture that was appended, only deleted"
+    assert not list(store.dir("observations").glob("*.md")) or \
+        all(p.name in store.git("ls-files", "observations").split()
+            for p in store.dir("observations").glob("*.md")), \
+        "a failed run left a fresh observation file behind"
+
+
+def test_deep_fault_restores_a_deleted_raw_file(store, index, raw_capture, monkeypatch):
+    path = raw_capture(["capture retention may delete"], day="2026-01-01")
+    store.commit("seed raw", add_all=True)
+    deep_mod.mark_raw_observed(store)
+    old = time.time() - 40 * 86400
+    os.utime(path, (old, old))
+
+    def boom(*a, **kw):
+        raise ValueError("injected after retention")
+
+    monkeypatch.setattr(deep_mod, "report", boom)
+    result = deep_pass(store, index, reason="transaction")
+
+    assert "rolled back" in result["error"]
+    assert path.exists(), "retention's deletion is undone with the other jobs"
+    assert "capture retention may delete" in path.read_text()
+    assert store.head() and not store.git("status", "--porcelain", "--", "shared").strip()
 
 
 def test_run_commits_its_own_archive_in_one_commit(store, index):

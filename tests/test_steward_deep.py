@@ -109,8 +109,9 @@ def test_retention_deletes_old_raw_and_tasks(store):
     assert not old_raw.exists() and fresh_raw.exists()
 
 
-def test_report_written(store):
-    report(store, {"pass": "deep", "reason": "test", "light": {}}, seconds=0.1)
+def test_report_written(store, index):
+    report(store, {"pass": "deep", "reason": "test", "light": {}}, seconds=0.1,
+           index=index)
     p = store.dir(f"reports/{store.today()}.md")
     assert p.exists()
     text = p.read_text()

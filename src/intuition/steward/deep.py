@@ -12,6 +12,9 @@ from ..model import Fact, Record, parse_validity
 from . import state as state_mod
 from .light import light_pass
 
+# Largest raw window one observer call reads, in characters.
+OBSERVER_SEND_CAP = 80000
+
 
 def deep_pass(store, index, *, reason: str = "nightly") -> dict:
     started = time.time()
@@ -21,7 +24,7 @@ def deep_pass(store, index, *, reason: str = "nightly") -> dict:
     result["light"] = light_pass(store, index, reason=f"deep:{reason}")
 
     jobs = result["jobs"]
-    observed = False
+    observed: dict[str, int] = {}
     try:
         jobs["expire"] = expire(store)
         jobs["aliases"] = mine_aliases(store, index)
@@ -29,12 +32,13 @@ def deep_pass(store, index, *, reason: str = "nightly") -> dict:
         jobs["profile"] = build_onepager(store, index)
         jobs["procedures"] = promote_procedures(store)
         if _model_configured(store):
-            jobs["observe"] = observe_raw(store, index)
-            observed = jobs["observe"] != "below threshold"
+            message, consumed = observe_raw(store, index)
+            jobs["observe"] = message
+            observed = consumed
             jobs["condense"] = condense_log(store)
         # retention runs after observation and skips capture nobody has read
         jobs["retention"] = retention(store)
-        report(store, result, seconds=time.time() - started)
+        report(store, result, seconds=time.time() - started, index=index)
         result["committed"] = store.commit(
             f"steward(deep): {len(jobs)} jobs [{reason}]", add_all=True)
     except Exception as e:                     # one fault rolls back every job
@@ -43,8 +47,8 @@ def deep_pass(store, index, *, reason: str = "nightly") -> dict:
         state_mod.touch(store, light=True)
         return result
     if observed:
-        # the observations are committed now, so consuming the raw is safe
-        mark_raw_observed(store)
+        # the observations are committed now, so consuming exactly those bytes is safe
+        mark_raw_observed(store, observed)
     state_mod.touch(store, deep=True)
     return result
 
@@ -217,19 +221,23 @@ def retention(store) -> dict:
 
 # -- observer / reflector (model-mode only) ----------------------------------------
 
-def observe_raw(store, index) -> str:
-    """Turn unprocessed raw turns into dated observations (Mastra-style)."""
+def observe_raw(store, index) -> tuple[str, dict[str, int]]:
+    """Turn unprocessed raw turns into dated observations (Mastra-style).
+
+    Returns the job's report line and the per-file offsets its text covered, so
+    the caller consumes exactly those bytes once the observations are committed.
+    """
     from ..llm import call_json
     threshold = int(store.section("observe", "observer_raw_chars", 80000))
-    text = _unprocessed_raw(store)
+    text, offsets = _raw_window(store, OBSERVER_SEND_CAP)
     if len(text) < threshold:
-        return "below threshold"
+        return "below threshold", {}
     system = ("Turn raw conversation turns into dense dated observations. "
               "Output JSON {\"observations\": [{\"day\": \"YYYY-MM-DD\", "
               "\"priority\": \"high|med|low\", \"text\": \"…\"}]}")
-    plan = call_json(store, "deep", system, text[:80000])
+    plan = call_json(store, "deep", system, text)
     n = _write_observations(store, plan.get("observations", []))
-    return f"{n} observations"
+    return f"{n} observations", offsets
 
 
 def condense_log(store) -> str:
@@ -273,24 +281,47 @@ def _write_observations(store, observations: list[dict]) -> int:
     return len(observations)
 
 
-def _unprocessed_raw(store) -> str:
-    """Raw bytes the observer has not consumed yet, tracked per file."""
+def _raw_window(store, max_chars: int | None = None) -> tuple[str, dict[str, int]]:
+    """Unconsumed raw text and, per file, the offset that text reaches.
+
+    With *max_chars* the window is bounded at a line boundary, and only the bytes
+    inside it are reported, so a later pass still sees what was left out.
+    """
     state = state_mod.load(store)
-    chunks = []
+    chunks: list[str] = []
+    offsets: dict[str, int] = {}
+    used = 0
     for p in state_mod.raw_files(store):
         data = p.read_bytes()
         done = state.raw_offset(p.name)
-        if len(data) > done:
-            chunks.append(data[done:].decode(errors="replace"))
-    return "\n".join(chunks)
+        if len(data) <= done:
+            continue
+        chunk = data[done:]
+        if max_chars is not None:
+            if used >= max_chars:
+                break
+            if used + len(chunk) > max_chars:
+                chunk = chunk[: max_chars - used]
+                cut = chunk.rfind(b"\n")
+                if cut > 0:
+                    chunk = chunk[: cut + 1]
+        used += len(chunk)
+        offsets[p.name] = done + len(chunk)
+        chunks.append(chunk.decode(errors="replace"))
+    return "\n".join(chunks), offsets
 
 
-def mark_raw_observed(store) -> dict[str, int]:
-    """Record every raw file as fully consumed up to its current size."""
+def _unprocessed_raw(store) -> str:
+    """Raw bytes the observer has not consumed yet, tracked per file."""
+    return _raw_window(store)[0]
+
+
+def mark_raw_observed(store, offsets: dict[str, int] | None = None) -> dict[str, int]:
+    """Record consumed raw capture: the given offsets, or every file as consumed."""
     state = state_mod.load(store)
-    offsets = state.mark_raw_observed()
+    recorded = state.mark_raw_observed(offsets)
     state.save()
-    return offsets
+    return recorded
 
 
 def _model_configured(store) -> bool:
@@ -301,11 +332,11 @@ def _model_configured(store) -> bool:
 
 # -- report -------------------------------------------------------------------------
 
-def report(store, result: dict, seconds: float) -> None:
+def report(store, result: dict, *, seconds: float, index) -> None:
     today = store.today()
     zero, total = 0, 0
     try:
-        zero, total = _miss_rate(store)
+        zero, total = index.miss_rate()
     except Exception:
         pass
     lines = [
@@ -331,15 +362,6 @@ def report(store, result: dict, seconds: float) -> None:
         f"- store size: {sum(1 for _ in store.dir('shared').rglob('*.md'))} records",
     ]
     store.write(f"reports/{today}.md", "\n".join(lines) + "\n")
-
-
-def _miss_rate(store):
-    import sqlite3
-    db = sqlite3.connect(store.dir(".intuition/index.sqlite"))
-    total = db.execute("SELECT COUNT(*) FROM misses").fetchone()[0]
-    zero = db.execute("SELECT COUNT(*) FROM misses WHERE found_id=''").fetchone()[0]
-    db.close()
-    return zero, total
 
 
 def _quarantine(store):

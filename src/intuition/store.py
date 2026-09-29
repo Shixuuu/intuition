@@ -31,7 +31,10 @@ STATE_DIR = ".intuition"
 # are append-only, and review/, tasks/, observations/drafts/ are written by agents
 # and hosts rather than by the run being undone.
 ROLLBACK_PATHS = ("shared", "agents", "observations", "reports", "timeline")
-ROLLBACK_NEW_FILE_PATHS = ("shared", "agents")
+# Where a run can leave a file git has never seen, including the observation and
+# report files it writes at the top of their directories. Host-written drafts live
+# one level deeper and are deliberately not matched.
+ROLLBACK_NEW_FILE_PATHS = ("shared", "agents", "observations/*.md", "reports/*.md")
 DEFAULT_CONFIG = """\
 [store]
 path = "{path}"
@@ -342,20 +345,25 @@ class Store:
         """Abort the current run: the vault goes back to HEAD (plan §6.2 step 8).
 
         Tracked files under the surfaces this run rewrites are checked out from
-        HEAD, and untracked files are removed only where a run can create one
-        (a record or a procedures file). Directories are left in place and paths
-        that match nothing are skipped, so a rollback can never make the next run
-        fail on a missing path. ``restore_raw`` also brings back raw capture the
-        deep pass deleted, which is the one deletion a run makes outside the vault.
+        HEAD, and files git has never seen are removed under the paths where a run
+        can create one. Directories and paths that match nothing are left alone, so
+        a rollback can never make the next run fail on a missing path. ``restore_raw``
+        brings back raw capture that retention *deleted*; it never touches raw
+        capture that was appended since the last commit.
         """
-        paths = (*ROLLBACK_PATHS, "raw") if restore_raw else ROLLBACK_PATHS
-        changed = self.git("diff", "--name-only", "HEAD", "--", *paths, check=False)
+        self.git("reset", "-q", "HEAD", "--", *ROLLBACK_NEW_FILE_PATHS, check=False)
+        changed = self.git("diff", "--name-only", "HEAD", "--", *ROLLBACK_PATHS,
+                           check=False)
         tracked = [line.strip() for line in changed.splitlines() if line.strip()]
         if tracked:
             self.git("checkout", "HEAD", "--", *tracked, check=False)
-        present = [name for name in ROLLBACK_NEW_FILE_PATHS if self.dir(name).is_dir()]
-        if present:
-            self.git("clean", "-fd", "--", *present, check=False)
+        if restore_raw:
+            deleted = self.git("diff", "--diff-filter=D", "--name-only", "HEAD",
+                               "--", "raw", check=False)
+            names = [line.strip() for line in deleted.splitlines() if line.strip()]
+            if names:
+                self.git("checkout", "HEAD", "--", *names, check=False)
+        self.git("clean", "-fd", "--", *ROLLBACK_NEW_FILE_PATHS, check=False)
         self.invalidate_record_cache()
 
     def head(self) -> str:

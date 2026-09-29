@@ -93,11 +93,20 @@ class State:
         except (TypeError, ValueError):
             return 0
 
-    def mark_raw_observed(self) -> dict[str, int]:
-        """Record every raw file's current size as consumed. Returns the map."""
-        offsets = {p.name: p.stat().st_size for p in raw_files(self.store)}
-        self.data[RAW_OFFSETS] = offsets
-        return offsets
+    def mark_raw_observed(self, offsets: dict[str, int] | None = None) -> dict[str, int]:
+        """Record consumption.
+
+        With *offsets*, store exactly those byte counts: what the observer read,
+        not whatever is on disk after a model call has been running for a minute.
+        Files the caller does not mention keep their previous offset.
+        """
+        merged = dict(self.data.get(RAW_OFFSETS) or {})
+        if offsets is None:
+            merged.update({p.name: p.stat().st_size for p in raw_files(self.store)})
+        else:
+            merged.update(offsets)
+        self.data[RAW_OFFSETS] = merged
+        return merged
 
 
 def raw_files(store) -> list[Path]:

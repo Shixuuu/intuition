@@ -9,6 +9,7 @@ from .. import inbox as inbox_mod
 from .. import safety
 from .. import search as search_mod
 from ..model import make_id
+from ..store import StoreError
 from . import ops as ops_mod
 from . import state as state_mod
 from . import validate as validate_mod
@@ -97,8 +98,8 @@ def deterministic_plan(store, index, batch: list[dict], candidates: dict) -> dic
                          "evidence": ev or text, "kind": kind, "source": source,
                          "confidence": conf if trust == "inferred" else None})
         if kind in ("preference", "decision"):
-            ops_list.append({"op": "observe", "text": f"User {kind}: {text}",
-                             "sources": [src], "evidence": ev or text, "kind": kind})
+            ops_list.append({"op": "observe", "text": text, "sources": [src],
+                             "evidence": ev or text, "kind": kind})
     return {"ops": ops_list, "summary": f"{len(ops_list)} deterministic ops"}
 
 
@@ -167,7 +168,12 @@ def light_pass(store, index, *, reason: str = "") -> dict:
     # 1. commit hand edits as manual; agent-written inbox and raw lines are this
     #    run's business, not a hand edit
     if store.dirty():
-        store.commit("manual: hand edits before steward run", paths=HAND_EDIT_PATHS)
+        try:
+            store.commit("manual: hand edits before steward run", paths=HAND_EDIT_PATHS)
+        except StoreError as e:              # fail closed: never sweep them into ours
+            result["error"] = f"hand-edit commit failed: {e}"
+            state_mod.touch(store, light=True)
+            return result
 
     batch = inbox_mod.read_batch(store)
     if not batch:
