@@ -15,7 +15,11 @@ Working name from the plan *Cairn* — renamed **Intuition**.
 4. **Stated beats inferred.** External content can never become an instruction,
    a preference, or a decision. The validator decides this from the cited inbox
    item, whichever planner proposed the op, and the pass quarantines the item it
-   refused instead of leaving it to block the batch.
+   refused instead of leaving it to block the batch. A proposal counts as
+   authored by "agent" when the main assistant wrote it or a subagent declared it
+   as its own in a learnings block; a subagent that read outside material
+   declares `source: external` there, and the gate then admits that content only
+   as an `#external` fact.
 5. **Stable prompt prefix.** Contract → PROFILE → ONEPAGER → observations →
    NOW → index lines is byte-identical within a session, so provider prompt
    caches hit. Per-turn snippets go after the conversation.
