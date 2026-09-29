@@ -1,7 +1,7 @@
 """Intuition — a daily-driver agent memory.
 
 Markdown in git is the truth. FTS5 is the index. The Steward is the only
-durable writer. Modules (plan §3.2):
+durable writer. Modules:
 
     model.py    record + fact grammar            index.py    SQLite FTS5 index
     store.py    paths, locks, atomic git writes  search.py   query → ranked records

@@ -1,4 +1,4 @@
-"""Deterministic plan validation (plan §6.4) — no AI in this file.
+"""Deterministic plan validation — no AI in this file.
 
 Every plan passes through here, so the trust decision lives here rather than in
 the planner. An op's own ``source``/``kind`` fields are a claim by whoever wrote
@@ -245,7 +245,7 @@ def unapplied_items(plan: dict, batch: list[dict]) -> list[dict]:
 
 
 def validate_vault(store, touched: set[str]) -> list[str]:
-    """plan §6.2 step 7: parse every touched file, links resolve, size caps."""
+    """Re-parse every touched file: links resolve and size caps hold."""
     problems: list[str] = []
     recs = store.scan_records()
     for rid in touched:

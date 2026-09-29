@@ -1,4 +1,4 @@
-"""Deep pass (plan §6.3): everything in light + condense, profile, aliases,
+"""Deep pass: everything in light + condense, profile, aliases,
 expiry, dedupe, procedures, retention, report. Deterministic jobs run without
 a model; observer/reflector/consolidation run only when one is configured.
 """
@@ -57,7 +57,7 @@ def deep_pass(store, index, *, reason: str = "nightly") -> dict:
 # -- expiry (Zep validity) ----------------------------------------------------
 
 def expire(store) -> list[str]:
-    """Remove facts whose `until` date passed (plan §4.3, §6.3)."""
+    """Remove facts whose `until` date passed."""
     today = store.today()
     removed = []
     for rid, rec in store.scan_records().items():
@@ -77,8 +77,7 @@ def expire(store) -> list[str]:
 # -- alias mining --------------------------------------------------------------
 
 def mine_aliases(store, index) -> list[str]:
-    """Strong miss→read pairs become aliases (plan §6.3; ≥2 occurrences without
-    a model to agree — 1 + model agreement when one is configured)."""
+    """Strong miss→read pairs become aliases."""
     min_occ = 1 if llm_mod.llm_configured(store) else 2
     added = []
     for query, rid, n in index.alias_candidates():
@@ -139,7 +138,7 @@ def _merge(store, keeper: Record, gone: Record) -> None:
 
 def build_onepager(store, index) -> str:
     """Regenerate ONEPAGER from #stated, #observed, #inferred ≥ 0.8 with ≥ 2
-    sources (plan §6.3 profile job, §9.1). Deterministic; no model needed."""
+    sources. Deterministic; no model needed."""
     from ..safety import profile_fact_ok
     cap = int(store.section("profile", "generated_max_chars"))
     min_confidence = float(store.section("safety", "profile_min_confidence"))
@@ -198,7 +197,7 @@ def promote_procedures(store) -> list[str]:
 
 def retention(store) -> dict:
     """raw > raw_days once the observer consumed it, tasks > tasks_days,
-    inbox archive > archive_months (plan §6.3)."""
+    inbox archive > archive_months."""
     raw_days = int(store.section("retention", "raw_days"))
     tasks_days = int(store.section("retention", "tasks_days"))
     archive_months = int(store.section("retention", "archive_months"))
@@ -251,7 +250,7 @@ def observe_raw(store, index) -> tuple[str, dict[str, int]]:
 
 
 def condense_log(store) -> str:
-    """Condense the observation log past reflector_log_chars (plan §6.3)."""
+    """Condense the observation log past reflector_log_chars."""
     from ..llm import call_json
     threshold = int(store.section("observe", "reflector_log_chars"))
     import datetime

@@ -1,4 +1,4 @@
-"""Read path: search, fusion, one-hop, pending inbox, budgets (plan §5.2)."""
+"""Read path: search, fusion, one-hop, pending inbox, budgets."""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def rrf_insert(ranked: dict[str, float], ids: list[str], k: int = 60) -> None:
 
 def search(store, index, queries: list[str], rtype: str | None = None,
            as_of: str | None = None, limit: int = 8) -> list[Hit]:
-    """plan §5.2 steps 1–7. Returns fused hits, best first."""
+    """Fuse every query's hits into one ranking, best first."""
     today = store.today()
     queries = [q for q in queries if q and q.strip()] or [""]
     fused: dict[str, float] = {}
@@ -60,7 +60,7 @@ def search(store, index, queries: list[str], rtype: str | None = None,
         fused = {rid: s for rid, s in fused.items()
                  if _type_of(index, rid) == rtype}
 
-    # one-hop expansion from the top 3 (plan §5.2 step 6). The requested type
+    # one-hop expansion from the top 3. The requested type
     # still applies: a hop must not widen the result set's types.
     hop_decay = float(store.section("search", "hop_decay"))
     top = sorted(fused, key=fused.get, reverse=True)[:3]
@@ -91,7 +91,7 @@ def search(store, index, queries: list[str], rtype: str | None = None,
 
 
 def pending_inbox_hits(store, queries: list[str]) -> list[Hit]:
-    """Grep inbox/pending.jsonl for the last pending_days days (plan §5.2 step 7)."""
+    """Grep inbox/pending.jsonl for the last pending_days days."""
     days = int(store.section("search", "pending_days"))
     cutoff = time.time() - days * 86400
     out: list[Hit] = []
@@ -127,12 +127,12 @@ def _log_misses(index, queries: list[str], hits: list[Hit]) -> None:
 
 
 def read_after_miss(index, query: str, rid: str) -> None:
-    """Agent read a record right after a zero-hit query — alias candidate (plan §5.2)."""
+    """Agent read a record right after a zero-hit query — alias candidate."""
     index.log_hit_after_miss(query, rid)
 
 
 def budget(store, hits: list[Hit]) -> list[Hit]:
-    """Cap injection: max_records / max_chars (plan §5.2 step 8)."""
+    """Cap injection: max_records / max_chars."""
     max_records = int(store.section("search", "max_records"))
     max_chars = int(store.section("search", "max_chars"))
     out, chars = [], 0

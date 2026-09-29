@@ -1,4 +1,4 @@
-"""Steward op application (plan §6.2 step 6, Appendix C.4).
+"""Steward op application.
 
 Ops: create · add_fact · close_fact · correct · add_alias · link · set_prose ·
 procedure_add · decision_propose · observe · remove_fact (forget only) ·
@@ -35,7 +35,7 @@ _REQUIRED = {
 
 
 def validate_schema(plan: dict, max_ops: int) -> str | None:
-    """plan §6.4 rules 'Schema' + 'Budget'. Returns reject reason or None."""
+    """Shape and budget rules. Returns a reject reason or None."""
     ops = plan.get("ops")
     if not isinstance(ops, list):
         return "schema: plan has no ops list"

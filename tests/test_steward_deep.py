@@ -1,5 +1,5 @@
 """Deep pass jobs without a model: expiry, dedupe, profile, retention,
-procedures promotion, reports (plan §6.3)."""
+procedures promotion, reports."""
 
 import os
 import time

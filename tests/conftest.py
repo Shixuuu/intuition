@@ -1,4 +1,4 @@
-"""Shared fixtures: a temp store seeded with the sample vault (plan §4.1)."""
+"""Shared fixtures: a temp store seeded with the sample vault."""
 
 import json
 import sys

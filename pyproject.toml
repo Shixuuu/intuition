@@ -13,6 +13,11 @@ hermes = []          # hermes_agent is provided by the host install
 test = ["pytest"]
 dev = ["pytest", "ruff"]
 
+[project.urls]
+Homepage = "https://github.com/Shixuuu/intuition"
+Repository = "https://github.com/Shixuuu/intuition"
+Issues = "https://github.com/Shixuuu/intuition/issues"
+
 [project.scripts]
 intuition = "intuition.cli:main"
 

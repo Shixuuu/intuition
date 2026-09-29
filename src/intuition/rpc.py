@@ -1,4 +1,4 @@
-"""stdio JSON-lines RPC server for the Pi extension (plan §8.2).
+"""stdio JSON-lines RPC server for the Pi extension.
 
 Protocol: one JSON object per line.
   → {"id": 1, "method": "search", "params": {...}}
@@ -32,7 +32,7 @@ def _prefix(store, index, params):
 
 
 def _capture_turn(store, index, params):
-    """Main only: append the turn to raw/<day>.jsonl (plan §8.2)."""
+    """Main only: append the turn to raw/<day>.jsonl."""
     line_no = 0
     p = store.dir(f"raw/{store.today()}.jsonl")
     if p.exists():

@@ -1,5 +1,5 @@
 """Steward light pass end-to-end: deterministic planning, apply, commit,
-rollback on failure, archive (plan §6.2, §11.1)."""
+rollback on failure, archive."""
 
 
 
@@ -94,7 +94,7 @@ def test_light_pass_procedure_goes_to_agent(store, index):
 
 
 def test_light_pass_rolls_back_on_apply_failure(store, index):
-    """Forced failure mid-apply: tree equals HEAD (plan §11.1)."""
+    """Forced failure mid-apply: tree equals HEAD."""
     inbox.append(store, kind="fact", text="Prefers agendas the day before",
                  source="user", evidence="she likes that", about="pers-june")
     from unittest.mock import patch

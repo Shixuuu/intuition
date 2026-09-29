@@ -1,4 +1,4 @@
-"""Store paths and default resolution (plan §4.1)."""
+"""Store paths and default resolution."""
 
 from __future__ import annotations
 

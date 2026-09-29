@@ -1,4 +1,4 @@
-"""Safety: trust ladder, imperative filter, secure scope (plan §9).
+"""Safety: trust ladder, imperative filter, secure scope.
 
 Ladder: #stated (user's words) > #observed (main assistant saw user actions)
 > #inferred:x (model generalised) > #external (web/email/other people).
@@ -21,23 +21,23 @@ IMPERATIVE_PATTERNS = (
 )
 _IMPERATIVE_RE = re.compile("|".join(IMPERATIVE_PATTERNS), re.IGNORECASE)
 
-PROFILE_MIN_CONFIDENCE = 0.8     # inferred enters profile only at ≥ 0.8 (plan §9.1)
+PROFILE_MIN_CONFIDENCE = 0.8     # inferred enters profile only at ≥ 0.8
 
 
 def trust_for(source: str) -> str:
-    """Map an inbox `source` to a trust tag (plan §4.8 → §4.3)."""
+    """Map an inbox `source` to a trust tag."""
     return {"user": "stated", "agent": "observed", "external": "external"}[source]
 
 
 def is_imperative(text: str) -> bool:
-    """Instruction-like external text → quarantine (plan §6.4, §9.2)."""
+    """Instruction-like external text → quarantine."""
     return bool(_IMPERATIVE_RE.search(text))
 
 
 def can_enter_profile(trust: str, confidence: float | None = None,
                       n_sources: int = 1,
                       min_confidence: float = PROFILE_MIN_CONFIDENCE) -> bool:
-    """plan §9.1: levels 1–2 always; level 3 only if x ≥ min_confidence and ≥ 2 sources."""
+    """Levels 1 and 2 always qualify; level 3 needs x ≥ min_confidence and 2 sources."""
     if trust in ("stated", "observed"):
         return True
     if trust == "inferred":
@@ -46,7 +46,7 @@ def can_enter_profile(trust: str, confidence: float | None = None,
 
 
 def can_create_preference_or_decision(source: str) -> bool:
-    """Only user or main; never external (plan §6.4 trust rule)."""
+    """Only user or main; never external."""
     return source in ("user", "agent") and source != "external"
 
 
@@ -56,7 +56,7 @@ def profile_fact_ok(fact, min_confidence: float = PROFILE_MIN_CONFIDENCE) -> boo
 
 
 def validate_op_safety(op: dict) -> str | None:
-    """Deterministic safety checks on a plan op (plan §6.4). Returns reject reason."""
+    """Deterministic safety checks on a plan op. Returns reject reason."""
     op_name = op.get("op", "")
     source = op.get("source", "agent")
     kind = op.get("kind", "")

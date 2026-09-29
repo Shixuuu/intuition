@@ -1,7 +1,12 @@
 # Intuition
 
 A daily-driver memory system for long-running AI agents (Hermes Agent, Pi).
-Working name from the plan *Cairn* — renamed **Intuition**.
+Markdown in git is the source of truth, one process writes it, and every fact
+carries the evidence it came from.
+
+![`/intuition` and `/intuition doctor` output](docs/preview.png)
+
+Real output from a session, with the store path shortened to `~/memory`.
 
 **The rules it never breaks:**
 
@@ -64,6 +69,15 @@ the `runtime.json` that `intuition install pi` records, `intuition` on `PATH`, a
 `tools.json`, the readmes, and the licence, which is what the `files` list holds.
 The Python side always comes from pip, pipx, or a checkout, because npm cannot
 install it.
+
+### Listing it on the Pi package gallery
+
+The gallery at https://pi.dev/packages discovers npm packages with the
+`pi-package` keyword, so there is nothing to submit. This package has carried the
+keyword since 0.1.0. `pi.image` in `package.json` supplies the preview, and the
+`repository`, `homepage`, and `bugs` fields point back here; npm metadata changes
+reach the gallery on the next published version, not on a rewrite of an existing
+one.
 
 ### Publishing the two artifacts
 
@@ -171,7 +185,7 @@ Hermes (Python provider) ──┐                     ┌── Pi (TS package)
   unprocessed, and retention only deletes capture the observer has read.
 - **Subagents** get read-only tools and receive memory through the task brief
   (Hermes `delegate_task` children skip providers, so the brief carries the
-  decisions + memory prefix + learnings `output_schema` — plan §14 Q1 fallback).
+  decisions + memory prefix + learnings `output_schema`
 
 ## Budgets
 

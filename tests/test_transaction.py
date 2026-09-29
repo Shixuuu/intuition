@@ -1,5 +1,5 @@
 """Transaction integrity: a fault anywhere in a Steward run leaves the vault at
-HEAD and the process's own view of the vault unchanged (plan §6.2 step 8, §6.3).
+HEAD and the process's own view of the vault unchanged.
 
 Each case injects the fault into the real path after it has already mutated
 records, so a rollback that only fixes the files but not the in-process record

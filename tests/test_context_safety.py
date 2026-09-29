@@ -1,5 +1,5 @@
 """Context assembly, briefs, safety ladder, leaks, multi-agent flow
-(plan §5.1, §7, §9)."""
+."""
 
 import json
 
@@ -44,7 +44,7 @@ def test_memory_brief_tool_returns_schema(store, index):
                            {"agent": "reviewer", "goal": "check ECCN fields"})
     assert out["task_id"].startswith("T-")
     assert out["output_schema"]["properties"]["learnings"]
-    # Hermes children get memory through the brief (plan §14 Q1 fallback)
+    # Hermes children get memory through the brief
     assert out["memory_prefix"].startswith("## Memory (read-only)")
 
 
@@ -124,7 +124,7 @@ def test_learnings_auto_accept_policy(store, index):
 
 def test_parallel_subagents_cannot_conflict(store, index):
     """Two subagents propose opposite decisions — both land as proposals,
-    neither is auto-accepted; the Steward sees them in one batch (plan §7.3)."""
+    neither is auto-accepted; the Steward sees them in one batch."""
     from intuition.tools import handle_tool_call
     for text in ("use vendor A", "use vendor B"):
         handle_tool_call(store, index, "memory_learn", {

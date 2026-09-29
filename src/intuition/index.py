@@ -1,4 +1,4 @@
-"""SQLite FTS5 index — derived, always rebuildable (plan §5.3).
+"""SQLite FTS5 index — derived, always rebuildable.
 
 Tables:
   docs_fts   FTS5, porter tokenizer, columns (name, aliases, headings, facts, prose)
@@ -173,7 +173,7 @@ class Index:
 
     @_serialized
     def alias_exact(self, query: str) -> list[str]:
-        """Whole-query alias matches — the fixed boost from plan §5.2 step 3."""
+        """Whole-query alias matches, boosted so they outrank a fuzzy hit."""
         wanted = query.strip().casefold()
         if not wanted:
             return []
@@ -222,7 +222,7 @@ class Index:
 
     @_serialized
     def log_hit_after_miss(self, query: str, rid: str) -> None:
-        """Agent searched (miss) then read a record — a candidate alias (plan §5.2)."""
+        """Agent searched (miss) then read a record — a candidate alias."""
         row = self.db.execute(
             "SELECT rowid FROM misses WHERE query=? AND found_id='' "
             "ORDER BY rowid DESC LIMIT 1", (query,)).fetchone()

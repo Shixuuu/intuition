@@ -1,4 +1,4 @@
-"""Steward triggers (plan §6.1): light on activity signals, deep once per night
+"""Steward triggers: light on activity signals, deep once per night
 after deep_time. A lock file ensures a single writer.
 
 Every trigger is a condition over the store's own state, and each one is
@@ -27,7 +27,7 @@ STEWARDSHIP_LOCK = "steward"
 
 
 def should_light(store) -> tuple[bool, str]:
-    """plan §6.1 light triggers: any one fires."""
+    """The light triggers. Any one of them fires a pass."""
     from .. import inbox as inbox_mod
     batch = inbox_mod.read_batch(store)
     if len(batch) >= int(store.section("steward", "light_inbox_items")):

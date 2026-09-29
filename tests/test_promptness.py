@@ -1,4 +1,4 @@
-"""Promptness and trigger consumption (plan §6.1).
+"""Promptness and trigger consumption.
 
 The state each case sets up is the state a quiet store is in right after a pass:
 a recent deep run, activity recorded, and a batch below every threshold.

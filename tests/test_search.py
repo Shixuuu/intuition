@@ -13,7 +13,7 @@ def _ids(hits):
 
 def test_stemming_plurals_and_word_forms(store, index):
     # the three instinct-memory failures: meeting→meetings, migrating→migration,
-    # and "pi" must NOT match inside "api" (plan §5.2)
+    # and "pi" must NOT match inside "api"
     assert _ids(_hits(store, index, ["meetings"])) == []
     store.write("shared/topic/t-sync.md", """\
 ---
@@ -152,7 +152,7 @@ def test_memory_tools_work_from_a_host_thread(store, index):
 
 
 def test_retrieval_eval_gate(store, index):
-    """plan §11.2: run the eval file against the sample vault, all cases hit."""
+    """Run the eval file against the sample vault: every case has to hit."""
     import tomllib
     from pathlib import Path
     cases = tomllib.loads(

@@ -1,5 +1,5 @@
 """Memory integrity: external content cannot become a durable instruction, and
-no proposal is dropped without a recorded reason (plan §6.4, §9.2, §7.4).
+no proposal is dropped without a recorded reason.
 
 The proposals below are instruction-shaped but deliberately avoid the imperative
 regex, so the trust gate is what stops them, not the keyword filter.

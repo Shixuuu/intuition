@@ -1,4 +1,4 @@
-"""Inbox: append-only JSONL proposals from all agents (plan §4.8, §8.3).
+"""Inbox: append-only JSONL proposals from all agents.
 
 Agents propose; only the Steward disposes. Each entry carries host, session,
 agent, kind, text, about, source, evidence, confidence. Processed items move

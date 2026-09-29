@@ -1,4 +1,4 @@
-"""Plan validation rules (plan §6.4) — each rule failing and passing."""
+"""Plan validation rules — each rule failing and passing."""
 
 
 from intuition.steward.validate import validate_plan, validate_vault

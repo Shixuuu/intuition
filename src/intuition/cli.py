@@ -1,4 +1,4 @@
-"""Intuition CLI (plan §10.3). Stdlib argparse; every command resolves the
+"""Intuition CLI. Stdlib argparse; every command resolves the
 store from --store, $INTUITION_STORE, or ~/memory."""
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def cmd_show(args) -> None:
 
 
 def cmd_why(args) -> None:
-    """Evidence chain for every fact of a record (plan §9.2)."""
+    """Evidence chain for every fact of a record."""
     store = _open_store(args)
     idx = _open_index(store)
     rec = store.load_record(args.id)
@@ -179,7 +179,7 @@ def cmd_log(args) -> None:
 
 
 def cmd_undo(args) -> None:
-    """One-command undo of a Steward run (plan §2.7, D6)."""
+    """One-command undo of a Steward run."""
     store = _open_store(args)
     ref = args.run_id or "HEAD"
     subject = store.commit_message(ref)
@@ -230,7 +230,7 @@ def cmd_backup(args) -> None:
     print(f"bundle written: {out}")
     old = sorted(target.glob("intuition-*.bundle"))
     for p in old[:-14]:
-        p.unlink()                                     # keep 14 (plan §10.4)
+        p.unlink()                                     # keep 14
 
 
 def cmd_purge(args) -> None:
@@ -279,7 +279,7 @@ def cmd_import_hermes(args) -> None:
                          source="agent", evidence=f"hermes {name} (agent-written → #observed)",
                          host="import")
             n += 1
-    print(f"queued {n} Hermes memory files (imported as #observed, plan §10.2)")
+    print(f"queued {n} Hermes memory files (imported as #observed)")
 
 
 def cmd_install_hermes(args) -> None:

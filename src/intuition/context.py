@@ -1,4 +1,4 @@
-"""Prompt assembly: stable prefix blocks and briefs (plan §5.1, Appendix C).
+"""Prompt assembly: stable prefix blocks and briefs.
 
 Order matters for caching: contract → PROFILE → ONEPAGER → observations →
 NOW → index lines form a stable prefix rebuilt only at session start. Per-turn
@@ -57,7 +57,7 @@ def _char_budget(store, section: str, key: str) -> int:
 
 
 def observations_tail(store, max_chars: int) -> str:
-    """The tail of this month's observation log, within *max_chars* (plan §5.1)."""
+    """The tail of this month's observation log, within *max_chars*."""
     import time
     text = store.read_text(f"observations/{time.strftime('%Y-%m')}.md")
     if not text:
@@ -96,7 +96,7 @@ def index_lines(store, index, max_lines: int) -> str:
 
 
 def build_main_prefix(store, index) -> str:
-    """Stable prefix for the main assistant (plan §5.1).
+    """Stable prefix for the main assistant.
 
     Every block is bounded by a character budget, so the prefix stays a fixed
     cost as the vault grows.
@@ -122,8 +122,8 @@ def build_main_prefix(store, index) -> str:
 
 
 def build_subagent_prefix(store, agent_name: str) -> str:
-    """Short contract + PROFILE + own PROCEDURES (plan §5.1). Hermes children get
-    this inside the brief because delegate_task skips providers (plan §14 Q1)."""
+    """Short contract + PROFILE + own PROCEDURES. Hermes children get
+    this inside the brief because delegate_task skips providers."""
     blocks = [SUBAGENT_CONTRACT]
     profile = _capped(store, "profile", "pinned_max_chars",
                       store.read_text("shared/PROFILE.md"))

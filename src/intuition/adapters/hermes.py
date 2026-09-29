@@ -1,4 +1,4 @@
-"""Hermes Agent MemoryProvider adapter (plan §8.1).
+"""Hermes Agent MemoryProvider adapter.
 
 Implements the real Hermes contract (agent/memory_provider.py in the host):
   * class attr pre_compress_checkpoint_api_version = 2 → receive
@@ -8,7 +8,7 @@ Implements the real Hermes contract (agent/memory_provider.py in the host):
   * agent_context ∈ {primary, subagent, cron}.
 
 Hermes `delegate_task` children skip external providers entirely
-(skip_memory=True), so per plan §14 Q1 the subagent's memory rides in the
+(skip_memory=True), so the subagent's memory rides in the
 brief text: memory_brief returns brief + memory_prefix + output_schema, and
 the main assistant passes them into delegate_task(context=…, output_schema=…).
 """
@@ -75,7 +75,7 @@ class IntuitionProvider(MemoryProvider):
         self._session = session_id
         self._role = kwargs.get("agent_context", "primary")
         self._agent = kwargs.get("agent_identity") or kwargs.get("agent") or "main"
-        # stable prefix built once per session (plan §5.1; caching principle 5)
+        # stable prefix built once per session
         if self._role == "subagent":
             self._prefix = ctx_mod.build_subagent_prefix(self._store, self._agent)
         elif self._role == "cron":
@@ -158,7 +158,7 @@ class IntuitionProvider(MemoryProvider):
 
     def on_memory_write(self, action: str, target: str, content: str,
                         metadata=None) -> None:
-        """Mirror built-in MEMORY.md/USER.md writes into the inbox (plan §8.1, Q5)."""
+        """Mirror built-in MEMORY.md/USER.md writes into the inbox."""
         from .. import inbox
         try:
             inbox.append(self._store, kind="fact", text=content[:2000],
@@ -168,7 +168,7 @@ class IntuitionProvider(MemoryProvider):
             pass
 
     def on_pre_compress(self, messages, *, require_checkpoint: bool = False) -> str:
-        """Checkpoint API v2: durable + idempotent before returning (plan §8.1)."""
+        """Checkpoint API v2: durable + idempotent before returning."""
         import hashlib
         texts = []
         for m in (messages or []):
@@ -190,7 +190,7 @@ class IntuitionProvider(MemoryProvider):
 
     def on_delegation(self, task: str, result: str, *, child_session_id: str = "",
                       **kwargs) -> None:
-        """Parent-side observation of delegate_task results (plan §8.1)."""
+        """Parent-side observation of delegate_task results."""
         from .. import inbox
         try:
             inbox.append(self._store, kind="fact", text=result[:1500],

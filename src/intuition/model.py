@@ -1,4 +1,4 @@
-"""Record and fact grammar (plan §4.2–4.4).
+"""Record and fact grammar.
 
 A record is a Markdown file with frontmatter, fact bullets and links:
 
@@ -20,7 +20,7 @@ A record is a Markdown file with frontmatter, fact bullets and links:
 Fact grammar:  "- (<validity>) <text> #<trust>[:<conf>] ^<source>[ ^<source>…]"
 Validity forms: "2026-09-26" | "since 2026-08" | "2026-03 → 2026-08" | "until 2026-10-15"
 A fact is current when today is inside its validity range. Corrections close the
-old range instead of deleting (plan §4.3). Round-trip safety: parse → render →
+old range instead of deleting. Round-trip safety: parse → render →
 parse is the identity (unit-tested).
 """
 
@@ -31,7 +31,7 @@ import re
 import time
 from dataclasses import dataclass, field
 
-# Record types (plan §4.2) and id prefixes.
+# Record types and id prefixes.
 RECORD_TYPES = {
     "person": "pers",
     "org": "org",
@@ -46,13 +46,13 @@ FACTS_SECTION = "## Facts"
 LINKS_SECTION = "## Links"
 FACT_HEAD = "- ("
 
-# Fixed link relations (plan §4.4).
+# Fixed link relations.
 LINK_RELS = (
     "works-at", "manages", "reports-to", "member-of", "owns",
     "supplies", "depends-on", "related-to", "decided-in", "supersedes",
 )
 
-MAX_RECORD_BODY = 8000          # plan §6.4 size cap
+MAX_RECORD_BODY = 8000
 NOW_MAX_CHARS = 4000
 BRIEF_MAX_CHARS = 8000
 
@@ -366,7 +366,7 @@ def render_record(rec: Record) -> str:
 
 
 def close_fact(rec: Record, match: str, end: str, sources: list[str]) -> bool:
-    """Close an open fact's range (plan §4.3: correct by closing, not deleting).
+    """Close an open fact's range.
     Returns True when a fact was closed."""
     for f in rec.facts:
         v = parse_validity(f.validity)

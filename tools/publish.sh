@@ -54,7 +54,7 @@ print('   shipped tool manifest matches the schema')
   "$PY" -m pytest tests -q | tail -1
   "$PY" -m ruff check src tests
   rm -rf dist && "$PY" -m build >/dev/null
-  "$PY" -m twine check dist/* | sed 's/^/   /' 
+  "$PY" -m twine check dist/* | sed 's/^/   /'
   say "   npm name $NPM_NAME: $(registry_state "https://registry.npmjs.org/$NPM_NAME")"
   say "   PyPI name $DIST_NAME: $(registry_state "https://pypi.org/pypi/$DIST_NAME/json")"
   if [ "$(registry_state "https://pypi.org/pypi/$DIST_NAME/json")" = "taken" ]; then

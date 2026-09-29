@@ -1,4 +1,4 @@
-"""Files, locks, atomic writes, git — the durable layer (plan §3.2, §9.5).
+"""Files, locks, atomic writes, git — the durable layer.
 
 Rules encoded here:
   * every path must stay inside the store (path-traversal check),
@@ -74,7 +74,7 @@ class Store:
         return self.root / rel
 
     def resolve(self, rel: str | Path) -> Path:
-        """Join + verify the path stays inside the store (plan §9.5)."""
+        """Join + verify the path stays inside the store."""
         p = (self.root / rel).resolve()
         if self.root.resolve() not in p.parents and p != self.root.resolve():
             raise StoreError(f"path escapes store: {rel}")
@@ -147,7 +147,7 @@ class Store:
             fh.close()
 
     def append_jsonl(self, rel: str | Path, obj: dict) -> None:
-        """Whole-line append under flock + fsync (plan §8.3)."""
+        """Whole-line append under flock + fsync."""
         p = self.resolve(rel)
         p.parent.mkdir(parents=True, exist_ok=True)
         line = json.dumps(obj, ensure_ascii=False, sort_keys=False)
@@ -307,7 +307,7 @@ class Store:
         return self.git("rev-parse", "--short", "HEAD").strip()
 
     def rollback(self, restore_raw: bool = False) -> None:
-        """Abort the current run: the vault goes back to HEAD (plan §6.2 step 8).
+        """Abort the current run: the vault goes back to HEAD.
 
         Tracked files under the surfaces this run rewrites are checked out from
         HEAD, and files git has never seen are removed under the paths where a run

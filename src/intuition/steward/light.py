@@ -1,4 +1,4 @@
-"""Light pass (plan §6.2): inbox + new raw → validated plan → one git commit."""
+"""Light pass: inbox + new raw → validated plan → one git commit."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ HAND_EDIT_PATHS = ("shared", "working", "agents")
 # ---------------------------------------------------------------------------
 
 def deterministic_plan(store, index, batch: list[dict], candidates: dict) -> dict:
-    """Rule-derived plan when no model is configured (plan §6.5 fallback).
+    """Rule-derived plan when no model is configured.
 
     The planner proposes; the validator disposes. Nothing is dropped silently:
     an item the rules cannot act on becomes a reject op carrying a reason.
@@ -160,7 +160,7 @@ def _match_hint(item: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def light_pass(store, index, *, reason: str = "") -> dict:
-    """plan §6.2 steps 1–9. Returns a summary dict for the caller/report."""
+    """Run one light pass end to end. Returns a summary dict for the report."""
     started = time.time()
     result: dict = {"pass": "light", "reason": reason, "ops": 0, "committed": "",
                     "archived": 0, "notes": [], "skipped": "", "unapplied": [],

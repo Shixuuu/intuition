@@ -1,4 +1,4 @@
-"""Raw capture pipeline: the observer's per-file progress and retention (plan §6.3).
+"""Raw capture pipeline: the observer's per-file progress and retention.
 
 Both defects these cover were live: a single global byte offset could never see
 turns appended to a second file, and retention deleted capture the observer had

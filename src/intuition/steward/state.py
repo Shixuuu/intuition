@@ -1,4 +1,4 @@
-"""Steward scheduler state: the one owner of ``.intuition/state.json`` (plan §6.1).
+"""Steward scheduler state: the one owner of ``.intuition/state.json``.
 
 Every key is written and read here, so no component reads a key that nothing
 writes. The file lives under ``.intuition/``, which is gitignored, so it never

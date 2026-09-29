@@ -180,7 +180,7 @@ def test_pi_package_manifests_agree_and_point_at_real_files():
     nested = json.loads((PACKAGE_DIR / "package.json").read_text())
 
     for field in ("name", "version", "description", "license", "keywords",
-                  "peerDependencies"):
+                  "peerDependencies", "repository", "homepage", "bugs"):
         assert root[field] == nested[field], field
     import tomllib
 

@@ -1,4 +1,4 @@
-"""Grammar round-trip + validity logic (plan §4.3, §11.1)."""
+"""Grammar round-trip + validity logic."""
 
 from intuition.model import (
     Fact,
@@ -71,7 +71,7 @@ def test_validity_current():
 
 
 def test_validity_as_of():
-    # "Who was Beacon's PM in May?" must use validity, not latest (plan §11.3)
+    # "Who was Beacon's PM in May?" must use validity, not latest
     rec = _june_record()
     may_pm = [f for f in rec.facts if f.at("2026-05-15") and "PM for" in f.text]
     assert len(may_pm) == 1 and "Beacon" in may_pm[0].text

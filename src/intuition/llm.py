@@ -1,4 +1,4 @@
-"""Model calls for the Steward: command or HTTP, JSON-checked, one retry (plan §6.5).
+"""Model calls for the Steward: command or HTTP, JSON-checked, one retry.
 
 Config (intuition.toml [steward]):
     llm_command_light = "pi -p --no-extensions '{prompt}'"
@@ -91,7 +91,7 @@ def call_json(store, which: str, system: str, user: str):
     if not cmd and not (http.get("url")):
         return None                      # deterministic mode
     last_err: Exception | None = None
-    for _ in range(2):                   # one retry (plan §6.5)
+    for _ in range(2):                   # one retry
         try:
             if cmd:
                 raw = call_command(cmd, system, user)

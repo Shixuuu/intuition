@@ -3,9 +3,22 @@
   "version": "0.1.0",
   "description": "Intuition memory for Pi: search, notes, and the Steward's settings, backed by Markdown in git",
   "license": "MIT",
-  "keywords": ["pi-package"],
+  "keywords": [
+    "pi-package"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Shixuuu/intuition.git"
+  },
+  "homepage": "https://github.com/Shixuuu/intuition",
+  "bugs": {
+    "url": "https://github.com/Shixuuu/intuition/issues"
+  },
   "pi": {
-    "extensions": ["./src/intuition/adapters/pi_package/extensions/intuition/index.ts"]
+    "extensions": [
+      "./src/intuition/adapters/pi_package/extensions/intuition/index.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/Shixuuu/intuition/main/docs/preview.png"
   },
   "files": [
     "src/intuition/adapters/pi_package/extensions/intuition/index.ts",

@@ -1,4 +1,4 @@
-"""Store: atomic writes, path safety, locks, git transaction (plan §9.5, §6.2)."""
+"""Store: atomic writes, path safety, locks, git transaction."""
 
 import threading
 from concurrent.futures import ThreadPoolExecutor

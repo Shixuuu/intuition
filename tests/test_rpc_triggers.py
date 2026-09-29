@@ -1,4 +1,4 @@
-"""RPC server end-to-end over stdio (plan §8.2) and triggers (plan §6.1)."""
+"""RPC server end-to-end over stdio and triggers."""
 
 import json
 import os

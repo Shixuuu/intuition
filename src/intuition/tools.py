@@ -1,7 +1,7 @@
-"""Agent tools (plan §5.4) — one implementation, three frontends (CLI, RPC, Hermes).
+"""Agent tools — one implementation, three frontends (CLI, RPC, Hermes).
 
 Subagents get only memory_search / memory_read. The main assistant gets the
-rest. secure_get is main-only and opt-in (plan §9.3).
+rest. secure_get is main-only and opt-in.
 """
 
 from __future__ import annotations
