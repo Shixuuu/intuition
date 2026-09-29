@@ -1,5 +1,5 @@
 [project]
-name = "intuition"
+name = "intuition-memory"
 version = "0.1.0"
 description = "Intuition — a daily-driver agent memory: Markdown in git, FTS5 search, one Steward that writes."
 requires-python = ">=3.11"

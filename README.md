@@ -28,7 +28,7 @@ Working name from the plan *Cairn* — renamed **Intuition**.
 ## Install
 
 ```bash
-python -m venv .venv && .venv/bin/pip install -e .
+python -m venv .venv && .venv/bin/pip install -e .   # or: pipx install intuition-memory
 intuition init ~/memory          # folders, config, git repo, sample vault
 intuition doctor                 # FTS5, git, store, steward mode
 intuition schedule               # systemd --user timer, every 15 min
@@ -76,10 +76,14 @@ tools/publish.sh --pypi                 # needs ~/.pypirc or TWINE_PASSWORD
 The preflight refuses a dirty tree, checks that the three version fields agree,
 that the shipped tool manifest matches the schema, and that the tests and lint
 pass, then prints what each registry would receive and whether the names are
-free. Uploads are irreversible, so run it first. Names as of today: the npm name
-`intuition-pi` is available, and PyPI's `intuition` is taken, so the Python
-distribution needs another name, which is one line in `pyproject.toml`. The
-import name and the `intuition` command stay the same either way.
+free. Uploads are irreversible, so run it first. The names are `intuition-pi` on
+npm and `intuition-memory` on PyPI, since PyPI's `intuition` was taken; the import
+name and the `intuition` command stay `intuition` on every path.
+
+Publishing needs credentials the preflight cannot supply: npm wants either a
+granular token with read and write access and "Bypass 2FA" checked, or a live
+one-time code (`tools/publish.sh --npm --otp 123456`), and PyPI wants a token in
+`~/.pypirc` or `TWINE_PASSWORD`.
 
 ## Day-to-day
 
