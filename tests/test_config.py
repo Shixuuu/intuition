@@ -182,6 +182,11 @@ def test_pi_package_manifests_agree_and_point_at_real_files():
     for field in ("name", "version", "description", "license", "keywords",
                   "peerDependencies"):
         assert root[field] == nested[field], field
+    import tomllib
+
+    pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
+    assert root["version"] == pyproject["project"]["version"], \
+        "the Pi extension version has to track the package version"
     assert "pi-package" in root["keywords"]
     assert root["pi"]["extensions"] == [
         "./src/intuition/adapters/pi_package/extensions/intuition/index.ts"], \
