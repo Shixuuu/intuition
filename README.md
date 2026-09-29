@@ -65,6 +65,22 @@ the `runtime.json` that `intuition install pi` records, `intuition` on `PATH`, a
 The Python side always comes from pip, pipx, or a checkout, because npm cannot
 install it.
 
+### Publishing the two artifacts
+
+```bash
+tools/publish.sh --check    # preflight only, uploads nothing
+npm login && tools/publish.sh --npm     # then: pi install npm:intuition-pi
+tools/publish.sh --pypi                 # needs ~/.pypirc or TWINE_PASSWORD
+```
+
+The preflight refuses a dirty tree, checks that the three version fields agree,
+that the shipped tool manifest matches the schema, and that the tests and lint
+pass, then prints what each registry would receive and whether the names are
+free. Uploads are irreversible, so run it first. Names as of today: the npm name
+`intuition-pi` is available, and PyPI's `intuition` is taken, so the Python
+distribution needs another name, which is one line in `pyproject.toml`. The
+import name and the `intuition` command stay the same either way.
+
 ## Day-to-day
 
 ```bash
