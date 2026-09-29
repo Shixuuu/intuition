@@ -152,10 +152,14 @@ def test_rpc_config_methods_use_the_same_writer(store, index):
         rpc.dispatch(store, index, "config_set", {"key": "nope", "value": "1"})
 
 
+def extension_source() -> str:
+    return (Path(__file__).parent.parent
+            / "src/intuition/adapters/pi_package/extensions/intuition/index.ts").read_text()
+
+
 def test_pi_extension_configures_through_a_command_not_a_tool():
     """Config must not be model-callable: the keys include the safety knobs."""
-    source = (Path(__file__).parent.parent
-              / "src/intuition/adapters/pi_package/extensions/intuition/index.ts").read_text()
+    source = extension_source()
 
     assert 'registerCommand("intuition"' in source
     routes = source.split("const ROUTES: Record<string, Route> = {", 1)[1].split("\n};", 1)[0]
@@ -164,3 +168,16 @@ def test_pi_extension_configures_through_a_command_not_a_tool():
     from intuition.tools import MEMORY_TOOL_SCHEMAS
 
     assert not [name for name in MEMORY_TOOL_SCHEMAS if "config" in name]
+
+
+def test_pi_extension_reports_a_broken_install_actionably():
+    """A first-run failure has to say what to do. The behaviour these pin is
+    captured end to end in the goal's degraded-paths.log."""
+    source = extension_source()
+
+    assert "cannot run the intuition CLI" in source
+    assert "install it, then run" in source
+    assert "this.proc = null" in source, \
+        "a failed spawn must clear the handle, or later calls report a timeout"
+    assert "this.lastStderr" in source, \
+        "the server's own reason (missing store, bad config) has to reach the notice"

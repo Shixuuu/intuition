@@ -78,6 +78,9 @@ class IntuitionRpc {
   private nextId = 1;
   private pending = new Map<number, Pending>();
   private buffer = "";
+  private startError: Error | null = null;
+  private spawnFailed = false;
+  private lastStderr = "";
 
   start(): void {
     if (this.proc) return;
@@ -88,16 +91,42 @@ class IntuitionRpc {
     });
     this.proc.stdout!.setEncoding("utf8");
     this.proc.stdout!.on("data", (chunk: string) => this.onData(chunk));
-    this.proc.stderr!.on("data", (data: Buffer) =>
-      console.error("[intuition]", data.toString().trim()));
+    this.proc.stderr!.on("data", (data: Buffer) => {
+      const text = data.toString().trim();
+      // the server explains why it refused to start (missing store, bad config),
+      // so keep its last line to carry into the notice the user sees
+      const last = text.split("\n").map((line) => line.trim()).filter(Boolean).pop();
+      if (last) this.lastStderr = last;
+      console.error("[intuition]", text);
+    });
     this.proc.on("error", (error: Error) => {
+      // a failed spawn never emits "exit", so clear the handle or every later
+      // call writes into a dead pipe and reports a timeout instead of the cause
       console.error("[intuition] rpc failed to start:", error.message);
-      this.failAll(error);
+      this.startError = error;
+      this.spawnFailed = true;
+      this.proc = null;
+      this.failAll(this.unavailable("rpc"));
     });
     this.proc.on("exit", (code: number | null) => {
       this.proc = null;
-      this.failAll(new Error(`intuition rpc exited (${code})`));
+      if (code !== 0) {
+        this.startError = new Error(this.lastStderr || `intuition rpc exited (${code})`);
+      }
+      this.failAll(this.unavailable("rpc"));
     });
+  }
+
+  private unavailable(method: string): Error {
+    if (this.spawnFailed) {
+      return new Error(
+        `cannot run the intuition CLI (${this.startError?.message}); ` +
+        "install it, then run `intuition install pi`");
+    }
+    if (this.startError) {
+      return new Error(this.startError.message);
+    }
+    return new Error(`rpc timeout: ${method}`);
   }
 
   private onData(chunk: string): void {
@@ -136,7 +165,7 @@ class IntuitionRpc {
         reject: (reason) => { clearTimeout(entry.timer); reject(reason); },
       };
       entry.timer = setTimeout(() => {
-        if (this.pending.delete(id)) entry.reject(new Error(`rpc timeout: ${method}`));
+        if (this.pending.delete(id)) entry.reject(this.unavailable(method));
       }, timeoutMs);
       this.pending.set(id, entry);
       this.proc!.stdin!.write(JSON.stringify({ id, method, params }) + "\n");
