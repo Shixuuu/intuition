@@ -5,6 +5,7 @@
 #   tools/publish.sh --npm              publish the Pi extension to npm
 #   tools/publish.sh --npm --otp 123456  the same, when the account wants a code
 #   tools/publish.sh --pypi             publish the Python package to PyPI
+#   tools/publish.sh --pypi --token-file /path/token   the same, unattended
 #
 # Both uploads are irreversible: a published npm version can only be replaced
 # within 72 hours, and PyPI never accepts the same version twice. The check mode
@@ -22,7 +23,9 @@ print(tomllib.load(open('pyproject.toml','rb'))['project']['name'])
 
 mode="${1:---check}"
 OTP=""
+TOKEN_FILE=""
 if [ "${2:-}" = "--otp" ] && [ -n "${3:-}" ]; then OTP="$3"; fi
+if [ "${2:-}" = "--token-file" ] && [ -n "${3:-}" ]; then TOKEN_FILE="$3"; fi
 
 say() { printf '%s\n' "$*"; }
 fail() { printf '✘ %s\n' "$*" >&2; exit 1; }
@@ -50,6 +53,8 @@ print('   shipped tool manifest matches the schema')
 "
   "$PY" -m pytest tests -q | tail -1
   "$PY" -m ruff check src tests
+  rm -rf dist && "$PY" -m build >/dev/null
+  "$PY" -m twine check dist/* | sed 's/^/   /' 
   say "   npm name $NPM_NAME: $(registry_state "https://registry.npmjs.org/$NPM_NAME")"
   say "   PyPI name $DIST_NAME: $(registry_state "https://pypi.org/pypi/$DIST_NAME/json")"
   if [ "$(registry_state "https://pypi.org/pypi/$DIST_NAME/json")" = "taken" ]; then
@@ -106,12 +111,27 @@ case "$mode" in
   --pypi)
     "$PY" -m twine --version >/dev/null 2>&1 \
       || fail "install the uploader first: $PY -m pip install twine"
-    [ -f "$HOME/.pypirc" ] || [ -n "${TWINE_PASSWORD:-}" ] \
-      || fail "no PyPI credentials; write ~/.pypirc or export TWINE_PASSWORD"
+    CRED=""
+    if [ -n "$TOKEN_FILE" ]; then
+      [ -f "$TOKEN_FILE" ] || fail "no token file at $TOKEN_FILE"
+      umask 077
+      CRED="$(mktemp -t pypirc.XXXXXX)"
+      printf '[distutils]\nindex-servers = pypi\n\n[pypi]\nusername = __token__\npassword = %s\n' \
+        "$(tr -d '\n' < "$TOKEN_FILE")" > "$CRED"
+      chmod 600 "$CRED"
+      trap '[ -n "${CRED:-}" ] && shred -u "$CRED" 2>/dev/null; true' EXIT
+    elif [ ! -f "$HOME/.pypirc" ] && [ -z "${TWINE_PASSWORD:-}" ]; then
+      fail "no PyPI credentials; pass --token-file, write ~/.pypirc, or export TWINE_PASSWORD"
+    fi
     preflight
     say "== publishing $DIST_NAME to PyPI =="
     rm -rf dist && "$PY" -m build
-    "$PY" -m twine upload dist/*
+    "$PY" -m twine check dist/*
+    if [ -n "$CRED" ]; then
+      "$PY" -m twine upload --config-file "$CRED" dist/*
+    else
+      "$PY" -m twine upload dist/*
+    fi
     say "verify with: pipx install $DIST_NAME"
     ;;
   *)
