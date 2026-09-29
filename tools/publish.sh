@@ -3,6 +3,7 @@
 #
 #   tools/publish.sh --check            preflights only, nothing is uploaded
 #   tools/publish.sh --npm              publish the Pi extension to npm
+#   tools/publish.sh --npm --otp 123456  the same, when the account wants a code
 #   tools/publish.sh --pypi             publish the Python package to PyPI
 #
 # Both uploads are irreversible: a published npm version can only be replaced
@@ -20,6 +21,8 @@ print(tomllib.load(open('pyproject.toml','rb'))['project']['name'])
 ")"
 
 mode="${1:---check}"
+OTP=""
+if [ "${2:-}" = "--otp" ] && [ -n "${3:-}" ]; then OTP="$3"; fi
 
 say() { printf '%s\n' "$*"; }
 fail() { printf '✘ %s\n' "$*" >&2; exit 1; }
@@ -86,7 +89,18 @@ case "$mode" in
     npm whoami >/dev/null 2>&1 || fail "npm has no credentials here; run 'npm login' first"
     preflight
     say "== publishing $NPM_NAME to npm =="
-    npm publish
+    set +e
+    if [ -n "$OTP" ]; then npm publish --otp "$OTP"; else npm publish; fi
+    status=$?
+    set -e
+    if [ $status -ne 0 ]; then
+      say
+      say "If the error above mentions two-factor authentication, the credential in"
+      say "~/.npmrc is a granular token without publish rights. Either create one with"
+      say "\"Bypass 2FA\" and read+write access to $NPM_NAME, or pass a code:"
+      say "  tools/publish.sh --npm --otp 123456"
+      exit $status
+    fi
     say "verify with: pi install npm:$NPM_NAME"
     ;;
   --pypi)
