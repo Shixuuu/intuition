@@ -173,6 +173,17 @@ def test_pi_extension_configures_through_a_command_not_a_tool():
     assert not [name for name in MEMORY_TOOL_SCHEMAS if "config" in name]
 
 
+def test_the_cli_reports_the_packaged_version():
+    """`intuition --version` is what a user checks, and it comes from a constant
+    in the package, not from the metadata: pin them together."""
+    import tomllib
+
+    import intuition
+
+    project = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
+    assert intuition.__version__ == project["project"]["version"]
+
+
 def test_pi_package_manifests_agree_and_point_at_real_files():
     """The repo manifest is what a git or npm install reads; the nested one is
     what `intuition install pi` copies. Their shared fields must not drift."""
@@ -187,6 +198,10 @@ def test_pi_package_manifests_agree_and_point_at_real_files():
     pyproject = tomllib.loads((Path(__file__).parent.parent / "pyproject.toml").read_text())
     assert root["version"] == pyproject["project"]["version"], \
         "the Pi extension version has to track the package version"
+    import intuition
+
+    assert intuition.__version__ == root["version"], \
+        "the code's version constant has to track the package version"
     assert "pi-package" in root["keywords"]
     assert root["pi"]["extensions"] == [
         "./src/intuition/adapters/pi_package/extensions/intuition/index.ts"], \

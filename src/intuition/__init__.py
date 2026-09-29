@@ -15,4 +15,4 @@ from .paths import resolve_store
 
 __all__ = ["Fact", "Link", "Record", "parse_record", "render_record", "resolve_store"]
 
-__version__ = "0.1.0"
+__version__ = "0.1.2"

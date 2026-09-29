@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.2
+
+- Fix `intuition --version`, which reported the previous version because the
+  constant in the package was not bumped with the metadata. A test now pins the
+  constant, both package manifests, and `pyproject.toml` together.
+
+
 ## 0.1.1
 
 - Carry the SPDX license expression and the project URLs in the published

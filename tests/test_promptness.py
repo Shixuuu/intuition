@@ -5,6 +5,7 @@ a recent deep run, activity recorded, and a batch below every threshold.
 """
 
 import json
+import sys
 import time
 from datetime import UTC, datetime, timedelta
 
@@ -97,16 +98,31 @@ def test_pending_age_condition_catches_a_stalled_proposal(store, index):
     assert fired and "waiting" in why
 
 
-def test_deep_runs_once_per_day_and_only_after_deep_time(store, index):
-    _just_passed_state(store, last_deep=0, last_deep_day="")
-    store.cfg.setdefault("steward", {})["deep_time"] = "00:00"
-    assert should_deep(store)[0] is True
+def test_deep_runs_once_per_day_and_only_after_deep_time(store, index, monkeypatch):
+    """The window is tested against a frozen clock: adding an hour to the real one
+    wraps past midnight and made this pass or fail depending on the hour."""
+    # `intuition.steward.tick` as an attribute is the function, not the module
+    tick_mod = sys.modules["intuition.steward.tick"]
 
-    later = (datetime.now() + timedelta(hours=1)).strftime("%H:%M")
-    store.cfg["steward"]["deep_time"] = later if later > "00:01" else "23:59"
+    class FrozenTime:
+        def __init__(self, hhmm: str):
+            self._hhmm = hhmm
+
+        def strftime(self, fmt: str) -> str:
+            return self._hhmm if fmt == "%H:%M" else time.strftime(fmt)
+
+        def time(self) -> float:
+            return time.time()
+
+    _just_passed_state(store, last_deep=0, last_deep_day="")
+    monkeypatch.setattr(tick_mod, "time", FrozenTime("12:00"))
+
+    store.cfg.setdefault("steward", {})["deep_time"] = "13:00"
     assert should_deep(store)[0] is False, "the window has not opened yet"
 
-    store.cfg["steward"]["deep_time"] = "00:00"
+    store.cfg["steward"]["deep_time"] = "11:00"
+    assert should_deep(store)[0] is True, "past deep_time with new activity"
+
     tick(store, index, deep=True)
     assert should_deep(store)[0] is False, "one deep pass per local day"
 
