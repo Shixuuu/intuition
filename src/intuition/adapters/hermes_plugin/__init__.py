@@ -43,8 +43,13 @@ except ImportError:
 
 
 def register(ctx) -> None:
-    """Memory-provider entry point for the host's discovery."""
-    ctx.register_memory_provider(IntuitionProvider())
+    """Memory-provider entry point for the host's discovery.
+
+    The context rides along so the Steward can plan on the active Hermes model
+    (see ``IntuitionProvider._host_model``); a host without one falls back to the
+    configured route.
+    """
+    ctx.register_memory_provider(IntuitionProvider(host_ctx=ctx))
 
 
 __all__ = ["IntuitionProvider", "register"]

@@ -9,6 +9,7 @@ Keys:
   last_deep       wall-clock of the last deep pass
   last_deep_day   local date of the last deep pass (the nightly window guard)
   last_activity   newest observed activity, advanced from raw capture mtimes
+  last_model      what planned the last pass: host, command, http, deterministic
   raw_offsets     {"<raw file name>": bytes the observer has already consumed}
 
 Raw progress is tracked per file. A single global byte offset cannot describe
@@ -31,6 +32,7 @@ LAST_DEEP_DAY = "last_deep_day"
 LAST_ACTIVITY = "last_activity"
 RAW_OFFSETS = "raw_offsets"
 ATTEMPTED_IDS = "attempted_ids"
+LAST_MODEL = "last_model"
 
 
 class State:

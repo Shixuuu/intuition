@@ -147,11 +147,13 @@ def memory_secure_get(store, index, args: dict) -> dict:
 
 
 def memory_status(store, index, args: dict) -> dict:
+    from .steward.state import LAST_MODEL, State
     batch = inbox.read_batch(store)
     zero, total = index.miss_rate()
     return {"inbox": len(batch), "records": len(store.scan_records()),
             "misses": f"{zero}/{total}",
             "quarantine": len(inbox.read_quarantine(store)),
+            "last_pass_model": State(store).data.get(LAST_MODEL, "none yet"),
             "head": store.head()}
 
 

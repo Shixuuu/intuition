@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The Steward plans on the host session's own model by default, so a fresh
+  install needs no model configuration. The Pi extension answers those requests
+  on the RPC channel with the session's active model; the Hermes provider answers
+  them through `ctx.llm`. `steward.llm_mode` (`host`, `command`, `http`, `none`)
+  picks the route, and a tick reports which one planned its batch.
+- `intuition doctor` and `/intuition` name the route and the inherited model.
+
+
 ## 0.1.2
 
 - Fix `intuition --version`, which reported the previous version because the

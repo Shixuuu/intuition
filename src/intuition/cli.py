@@ -77,9 +77,7 @@ def cmd_doctor(args) -> None:
         checks.append(("store", f"{store.root} · {n} records · inbox {len(batch)} "
                        f"· quarantine {len(q)}", True))
         checks.append(("index", f"fresh={not idx.is_stale()}", True))
-        mode = ("model configured" if llm_mod.llm_configured(store)
-                else "not configured → deterministic mode")
-        checks.append(("steward model", mode, True))
+        checks.append(("steward model", llm_mod.describe_route(store), True))
         checks.append(("secure scope",
                        "enabled" if store.section("safety", "secure_enabled")
                        else "disabled (recommended default)", True))

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import time
 
+from .. import llm as llm_mod
 from ..model import parse_iso_ts
 from .deep import deep_pass
 from .light import light_pass
@@ -18,6 +19,7 @@ from .state import (
     LAST_ACTIVITY,
     LAST_DEEP,
     LAST_DEEP_DAY,
+    LAST_MODEL,
     State,
     newest_raw_mtime,
     pending_raw_bytes,
@@ -83,19 +85,35 @@ def tick(store, index, *, light: bool = False, deep: bool = False,
          session_end: bool = False, reason: str = "") -> dict:
     """Entry point for `intuition tick` and for the host session-end hooks."""
     with store.lock(STEWARDSHIP_LOCK):
-        if deep:
-            return deep_pass(store, index, reason=reason or "forced")
-        if light:
-            return light_pass(store, index, reason=reason or "forced")
-        do_light, why = should_light(store)
-        if not do_light and session_end:
-            do_light, why = should_light_at_session_end(store)
-        if do_light:
-            return light_pass(store, index, reason=why)
-        do_deep, why = should_deep(store)
-        if do_deep:
-            return deep_pass(store, index, reason=why)
-        return {"pass": "none", "skipped": "no trigger", "reason": ""}
+        llm_mod.LAST_ROUTE = ""              # what this pass plans with, for the report
+        result = _tick_once(store, index, light=light, deep=deep,
+                            session_end=session_end, reason=reason)
+        if llm_mod.LAST_ROUTE:
+            result["model"] = llm_mod.LAST_ROUTE
+        elif result.get("pass") not in ("none", None):
+            result["model"] = "deterministic"
+        if result.get("model"):
+            state = State(store)
+            state.data[LAST_MODEL] = result["model"]
+            state.save()
+        return result
+
+
+def _tick_once(store, index, *, light: bool, deep: bool,
+               session_end: bool, reason: str) -> dict:
+    if deep:
+        return deep_pass(store, index, reason=reason or "forced")
+    if light:
+        return light_pass(store, index, reason=reason or "forced")
+    do_light, why = should_light(store)
+    if not do_light and session_end:
+        do_light, why = should_light_at_session_end(store)
+    if do_light:
+        return light_pass(store, index, reason=why)
+    do_deep, why = should_deep(store)
+    if do_deep:
+        return deep_pass(store, index, reason=why)
+    return {"pass": "none", "skipped": "no trigger", "reason": ""}
 
 
 # -- helpers ------------------------------------------------------------------------

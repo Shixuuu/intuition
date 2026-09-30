@@ -15,13 +15,15 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Type } from "@earendil-works/pi-ai";
+import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { defineTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 declare const __dirname: string | undefined;
 
 const CALL_TIMEOUT_MS = 10_000;
-const TICK_TIMEOUT_MS = 120_000;
+const TICK_TIMEOUT_MS = 300_000;
+const MODEL_TIMEOUT_MS = 100_000;
+const MODEL_MAX_TOKENS = 12_000;
 
 interface Pending {
   resolve: (value: any) => void;
@@ -32,7 +34,7 @@ interface Pending {
 interface ToolSpec {
   name: string;
   description: string;
-  parameters: unknown;
+  parameters: TSchema;
 }
 
 interface Runtime {
@@ -139,6 +141,10 @@ class IntuitionRpc {
       if (!line) continue;
       try {
         const message = JSON.parse(line);
+        if (message.llm) {
+          void this.answerModel(message.llm);
+          continue;
+        }
         const pending = this.pending.get(message.id);
         if (!pending) continue;
         this.pending.delete(message.id);
@@ -153,6 +159,55 @@ class IntuitionRpc {
   private failAll(error: Error): void {
     for (const pending of this.pending.values()) pending.reject(error);
     this.pending.clear();
+  }
+
+  /**
+   * The Steward asks for a plan on this session's model, so a fresh install needs
+   * no model settings of its own. Failures come back as an error line: the pass
+   * then leaves its batch for the next one instead of writing a worse plan.
+   */
+  private async answerModel(request: any): Promise<void> {
+    const id = request?.id;
+    try {
+      const ctx = hostCtx;
+      const model = ctx?.model;
+      if (!ctx || !model) throw new Error("this Pi session has no active model");
+      const message: any = await withTimeout<any>(
+        ctx.modelRegistry.complete(model, {
+          systemPrompt: String(request?.system ?? ""),
+          messages: [{
+            role: "user",
+            content: [{ type: "text", text: String(request?.user ?? "") }],
+            timestamp: Date.now(),
+          }],
+        }, {
+          // Room for a reasoning model's thinking plus the JSON plan it answers
+          // with; asking for more than the model takes is harmless.
+          maxTokens: Math.min(MODEL_MAX_TOKENS, Number(model.maxTokens) || MODEL_MAX_TOKENS),
+          // The session's own identity: providers that route by session (opencode)
+          // reject a nested call that arrives without it.
+          sessionId: ctx.sessionManager?.getSessionId?.() ?? undefined,
+        }),
+        MODEL_TIMEOUT_MS,
+        `the active model (${model.provider}/${model.id}) did not answer within ` +
+        `${MODEL_TIMEOUT_MS / 1000}s`,
+      );
+      const text = assistantText(message);
+      if (!text.trim()) {
+        throw new Error(message?.errorMessage || "the active model returned no text");
+      }
+      this.replyModel(id, { text });
+    } catch (error) {
+      this.replyModel(id, null, (error as Error)?.message ?? String(error));
+    }
+  }
+
+  private replyModel(id: unknown, result: any, error?: string): void {
+    const stdin = this.proc?.stdin;
+    if (!stdin?.writable) return;
+    stdin.write(JSON.stringify(error
+      ? { id, method: "llm_result", error }
+      : { id, method: "llm_result", result }) + "\n");
   }
 
   call(method: string, params: Record<string, unknown> = {},
@@ -189,6 +244,9 @@ const agentName = process.env.INTUITION_AGENT || (isChild ? "child" : "main");
 let prefixSent = false;
 let lastPrompt = "";
 let settings: Setting[] = [];
+/** Context of the most recent event: it carries the session's active model, which
+ *  is what the Steward plans on unless the user configures another route. */
+let hostCtx: any = null;
 
 const here = typeof __dirname === "string"
   ? __dirname
@@ -290,6 +348,41 @@ function messageText(message: any): string {
   return "";
 }
 
+/** Text blocks of an assistant message, ignoring thinking and tool calls. */
+function assistantText(message: any): string {
+  const content = message?.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter((part) => part?.type === "text")
+    .map((part) => part?.text ?? "")
+    .join("");
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), ms);
+    promise.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
+}
+
+/** What the Steward is told about this session's model, per tick. */
+function hostModel(): Record<string, unknown> {
+  const model = hostCtx?.model;
+  if (!model) return { available: false };
+  return { available: true, label: `${model.provider}/${model.id}` };
+}
+
+function hostModelLine(): string {
+  const model = hostCtx?.model;
+  return model
+    ? `Steward model: ${model.provider}/${model.id} (this session's model)`
+    : "Steward model: none in this session; set steward.llm_mode or an endpoint";
+}
+
 function checkpointText(preparation: any): string {
   const lines: string[] = [];
   const previous = preparation?.previousSummary;
@@ -338,6 +431,7 @@ function settingsSummary(rows: Setting[]): string {
   const lines = rows.map((row) =>
     `${row.overridden ? "*" : " "} ${row.key.padEnd(width)}  ${formatValue(row.value)}`);
   return [
+    hostModelLine(),
     `Intuition settings (${rows.length}); * changed from the default`,
     ...lines,
     "",
@@ -418,13 +512,15 @@ export default function (pi: ExtensionAPI) {
   }
   registerConfigCommand(pi);
 
-  pi.on("session_start", async () => {
+  pi.on("session_start", async (_event: any, ctx: any) => {
+    hostCtx = ctx;
     prefixSent = false;
     rpc.start();
     await loadSettings().catch(() => undefined);
   });
 
-  pi.on("before_agent_start", async (event: any) => {
+  pi.on("before_agent_start", async (event: any, ctx: any) => {
+    hostCtx = ctx;
     lastPrompt = typeof event?.prompt === "string" ? event.prompt : "";
     if (prefixSent) return undefined;
     try {
@@ -441,7 +537,8 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("turn_end", async (event: any) => {
+  pi.on("turn_end", async (event: any, ctx: any) => {
+    hostCtx = ctx;
     if (isChild) return;                        // children never write raw/
     const turns: Array<[string, string]> = [
       ["user", lastPrompt],
@@ -457,7 +554,8 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_before_compact", async (event: any) => {
+  pi.on("session_before_compact", async (event: any, ctx: any) => {
+    hostCtx = ctx;
     try {
       await rpc.call("checkpoint", { summary_text: checkpointText(event?.preparation) });
       prefixSent = false;                       // rebuild the prefix after compaction
@@ -466,9 +564,18 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (_event: any, ctx: any) => {
+    hostCtx = ctx;
     try {
-      await rpc.call("tick", { reason: "session_end", session_end: true }, TICK_TIMEOUT_MS);
+      const result = await rpc.call("tick", {
+        reason: "session_end",
+        session_end: true,
+        host_model: hostModel(),
+      }, TICK_TIMEOUT_MS);
+      // a pass that could not plan says why here; the batch waits for the next one
+      if (result?.tick?.error) {
+        console.error("[intuition] session-end pass:", result.tick.error);
+      }
     } catch (error) {
       console.error("[intuition] session-end tick failed:", error);
     }

@@ -116,6 +116,16 @@ intuition backup --to /mnt/backup
 
 ## Configure
 
+The Steward needs a model to plan with, and by default it borrows the one the
+session is already using: in Pi the extension runs the plan prompt on the
+session's active model, and in Hermes the provider runs it through `ctx.llm`.
+Nothing has to be configured for this, and `/intuition` names the model it
+inherited.
+
+`steward.llm_mode` changes that: `host` (the default) asks the session first and
+falls back to a command or an endpoint when the host has none, `command` and
+`http` use only the configured route, and `none` keeps every pass rule-derived.
+
 Every setting lives in one file, `<store>/intuition.toml`, shared by both hosts.
 The keys, their types, their defaults, and a help line each come from
 `config.SETTINGS`, so the file written at `init`, the readers, and the command
@@ -168,8 +178,9 @@ Hermes (Python provider) ──┐                     ┌── Pi (TS package)
   link expansion at ×0.3 (inside the type filter, so a hop cannot widen the
   requested type) → pending-inbox matches → budget cap (4 records /
   2400 chars) → zero-hit queries logged as misses; miss→read pairs grow aliases.
-- **Write path** (`steward/`): triggers → plan (model via `llm_command_*`/HTTP,
-  or deterministic rules) → validation (schema, verbatim evidence, trust ladder
+- **Write path** (`steward/`): triggers → plan (the host session's model by
+  default, else `llm_command_*`/HTTP, else deterministic rules) → validation
+  (schema, verbatim evidence, trust ladder
   resolved from the cited item, imperative filter, secure scope, size caps, id
   rules, op budget, no silent deletes) → apply to **copies** → vault re-validate →
   archive inside the transaction → **one commit or a path-scoped rollback**.
@@ -227,8 +238,9 @@ gate against a fresh store. Measured on this machine: **search p95 = 6 ms on a
 
 ## What is stubbed for later
 
-- Observer/reflector/consolidation need a configured model
-  (`[steward] llm_command_light/deep` or `llm_http`); without one the Steward
-  runs in deterministic mode and skips those jobs.
+- Observer/reflector/consolidation plan on the host session's model. A tick that
+  runs outside a host (cron, `intuition tick` in a shell) has no session model,
+  so it needs `[steward] llm_command_light/deep` or `llm_http` to do that work;
+  without one it keeps to the rule-derived passes.
 - The Pi package ships `extensions/intuition/index.ts` plus a generated
   `tools.json`. Pi runs TypeScript through jiti, so no build step is needed.

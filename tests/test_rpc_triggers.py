@@ -43,6 +43,43 @@ def rpc(store):
     client.close()
 
 
+class HostRpcClient(RpcClient):
+    """A client that also answers the child's model requests, as Pi does."""
+
+    def __init__(self, store_path):
+        super().__init__(store_path)
+        self.model_requests: list[dict] = []
+
+    def serve(self, method, params, reply_text="", reply_error=None):
+        """Send a request, answer any model request it makes, return its response."""
+        self.nid += 1
+        self.p.stdin.write(json.dumps({"id": self.nid, "method": method,
+                                       "params": params}) + "\n")
+        self.p.stdin.flush()
+        while True:
+            line = self.p.stdout.readline()
+            assert line, self.p.stderr.read()
+            message = json.loads(line)
+            if "llm" in message:
+                self.model_requests.append(message["llm"])
+                answer = {"id": message["llm"]["id"], "method": "llm_result"}
+                if reply_error is not None:
+                    answer["error"] = reply_error
+                else:
+                    answer["result"] = {"text": reply_text}
+                self.p.stdin.write(json.dumps(answer) + "\n")
+                self.p.stdin.flush()
+                continue
+            return message
+
+
+@pytest.fixture
+def host_rpc(store):
+    client = HostRpcClient(store.root)
+    yield client
+    client.close()
+
+
 def test_rpc_ping(rpc):
     out = rpc.call("ping")
     assert out["result"]["pong"] is True
@@ -98,6 +135,52 @@ def test_rpc_config_round_trip_over_stdio(rpc, store):
     bad = rpc.call("config_set", {"key": "steward.not_a_key", "value": "1"})
     assert "error" in bad and "unknown setting" in bad["error"]
     assert rpc.call("ping")["result"]["pong"] is True
+
+
+# -- the host's own model on the wire -------------------------------------------------
+
+def _pending_note(store):
+    return inbox.append(store, kind="fact", text="june wants the agenda early",
+                        source="user", evidence="june wants the agenda early")
+
+
+def test_rpc_tick_plans_on_the_host_session_model(host_rpc, store):
+    """The whole zero-config path: no model settings, the Pi session's model plans."""
+    _pending_note(store)
+    out = host_rpc.serve(
+        "tick", {"reason": "session_end", "session_end": True,
+                 "host_model": {"available": True, "label": "test/model"}},
+        reply_text='{"ops": [{"op": "noop"}], "summary": "s"}')
+
+    assert "error" not in out, out
+    assert out["result"]["tick"]["pass"] == "light"
+    assert out["result"]["tick"]["model"] == "host"
+    assert host_rpc.model_requests, "the child must ask the host for the plan"
+    assert host_rpc.model_requests[0]["system"]
+    assert "batch" in host_rpc.model_requests[0]["user"]
+
+
+def test_rpc_tick_without_a_host_model_stays_deterministic(host_rpc, store):
+    _pending_note(store)
+    out = host_rpc.serve(
+        "tick", {"reason": "session_end", "session_end": True,
+                 "host_model": {"available": False}})
+
+    assert out["result"]["tick"]["model"] == "deterministic"
+    assert host_rpc.model_requests == []
+
+
+def test_rpc_tick_keeps_the_batch_when_the_host_model_fails(host_rpc, store):
+    item = _pending_note(store)
+    out = host_rpc.serve(
+        "tick", {"reason": "session_end", "session_end": True,
+                 "host_model": {"available": True, "label": "test/model"}},
+        reply_error="the active model refused")
+
+    assert "the active model refused" in out["result"]["tick"]["error"]
+    pending = {row["id"] for row in store.read_jsonl("inbox/pending.jsonl")}
+    assert item["id"] in pending, "an unplanned proposal waits for the next pass"
+    assert host_rpc.call("ping")["result"]["pong"], "the channel still works"
 
 
 # -- triggers ------------------------------------------------------------------------

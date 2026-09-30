@@ -68,6 +68,9 @@ SETTINGS: dict[str, Setting] = {
         str, "03:00", "local time after which the nightly deep pass runs"),
     "steward.max_plan_ops": _setting(
         int, 60, "operations one plan may carry"),
+    "steward.llm_mode": _setting(
+        str, "host", "where the planner's model comes from: the host session, "
+        "a shell command, an HTTP endpoint, or none", ("host", "command", "http", "none")),
     "steward.llm_command_light": _setting(
         str, "", "shell command for the light planner, {prompt} substituted"),
     "steward.llm_command_deep": _setting(
@@ -138,8 +141,11 @@ def coerce(key: str, value):
         except ValueError as exc:
             raise ConfigError(f"{key} takes a number, got {value!r}") from exc
     text = str(value)
-    if setting.choices and text.strip().casefold() not in setting.choices:
-        raise ConfigError(f"{key} takes one of {', '.join(setting.choices)}")
+    if setting.choices:
+        folded = text.strip().casefold()
+        if folded not in setting.choices:
+            raise ConfigError(f"{key} takes one of {', '.join(setting.choices)}")
+        return folded                     # store the canonical spelling
     return text
 
 

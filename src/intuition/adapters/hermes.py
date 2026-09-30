@@ -50,13 +50,15 @@ class IntuitionProvider(MemoryProvider):
     def name(self) -> str:
         return "intuition"
 
-    def __init__(self):
+    def __init__(self, host_llm=None, host_ctx=None):
         self._store: Store | None = None
         self._index: Index | None = None
         self._role = "primary"
         self._agent = "main"
         self._session = ""
         self._prefix = ""
+        self._host_llm = host_llm          # the host's ctx.llm facade, when offered
+        self._host_ctx = host_ctx          # kept so the facade can be found later
         self._turns: queue.Queue[tuple] = queue.Queue()
 
     # -- lifecycle -----------------------------------------------------------
@@ -202,13 +204,43 @@ class IntuitionProvider(MemoryProvider):
     def on_session_end(self, messages) -> None:
         spawn_context_thread(self._session_end_tick, name="intuition-end-tick")
 
-    def _session_end_tick(self) -> None:
+    def _host_model(self):
+        """The host's model facade, however this host handed the plugin over.
+
+        A general plugin context exposes ``llm``. The memory-provider activation
+        path hands over a collector instead, one that builds a real plugin context
+        on demand for the registrars it forwards — asking it then is how a provider
+        reaches the same facade. Resolution waits until the first pass, so plugin
+        registration stays cheap and needs no host import.
+        """
+        if self._host_llm is None and self._host_ctx is not None:
+            self._host_llm = _host_llm(self._host_ctx)
+        return self._host_llm
+
+    def _host_call(self, system: str, user: str) -> str:
+        """One completion on the user's active Hermes model, for the Steward."""
+        from ..llm import LLMError
         try:
-            from ..steward import tick as steward_tick
+            result = self._host_model().complete([
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ])
+        except Exception as e:                  # host routing/auth failure
+            raise LLMError(f"hermes model call failed: {e}") from e
+        return str(getattr(result, "text", "") or "")
+
+    def _session_end_tick(self) -> None:
+        from .. import llm as llm_mod
+        from ..steward import tick as steward_tick
+        if self._host_model() is not None:
+            llm_mod.set_host_transport(self._host_call, label="hermes session model")
+        try:
             steward_tick(self._store, self._index, session_end=True,
                          reason="session_end")
         except Exception:
             pass
+        finally:
+            llm_mod.clear_host_transport()
 
     def shutdown(self) -> None:
         if self._index:
@@ -234,9 +266,23 @@ class IntuitionProvider(MemoryProvider):
             return []
 
 
+def _host_llm(ctx):
+    """The host's model facade from a plugin context, or None when it has none."""
+    direct = getattr(ctx, "llm", None)
+    if direct is not None:
+        return direct
+    build = getattr(ctx, "_plugin_context", None)     # the memory-provider collector
+    if callable(build):
+        try:
+            return getattr(build(), "llm", None)
+        except Exception:
+            return None
+    return None
+
+
 def register(ctx) -> None:
     """Hermes plugin entry point (directory plugin or pip entry point)."""
     try:
-        ctx.register_memory_provider(IntuitionProvider())
+        ctx.register_memory_provider(IntuitionProvider(host_ctx=ctx))
     except AttributeError:
         pass                      # older host: falls back to subclass discovery

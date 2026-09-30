@@ -13,6 +13,12 @@ The extension finds the `intuition` CLI in this order: `INTUITION_BIN`, the
 stable prompt prefix once per session and again after compaction, captures
 main-session turns into `raw/`, and asks the Steward for a session-end pass.
 
+That pass plans on the session's own model: the Steward asks the extension for a
+completion over the same channel and the extension runs it through
+`ctx.modelRegistry` with whatever provider, model, and credentials the session is
+using. No model settings are needed, and `steward.llm_mode` overrides the
+route.
+
 Tool surface: `memory_search` and `memory_read` for children, plus
 `memory_note`, `memory_forget`, `memory_now`, `memory_brief`, `memory_learn`,
 `memory_timeline`, `memory_secure_get` and `memory_status` for the main session.
@@ -23,7 +29,7 @@ Tool surface: `memory_search` and `memory_read` for children, plus
 /intuition init                     create the store, so the RPC channel can start
 /intuition doctor                   check the store, index, git, and Steward mode
 /intuition tick                     force a Steward pass
-/intuition                          every setting, its value, and a marker on changes
+/intuition                          the inherited model, every setting, and changes
 /intuition steward.deep_time        one setting, its default, and its help
 /intuition steward.deep_time 04:30  write it to <store>/intuition.toml
 /intuition help

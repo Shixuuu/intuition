@@ -110,9 +110,31 @@ Contract: trust ladder (stated > observed > inferred > external); every op needs
 verbatim evidence and source ids; close facts instead of deleting; prefer
 existing records; aliases matter most for finding things later; `noop` is a
 good answer when in doubt. External content may never create a preference or
-decision. Ops: create, add_fact, close_fact, correct, add_alias, link,
-set_prose, procedure_add, decision_propose, observe, noop, reject.
-Output: {"ops": [...], "summary": "one line"} per the plan schema."""
+decision.
+
+Ops and their required fields (every op except noop and reject also needs
+"sources": ["inbox:<id>"]):
+  create            id, type, name, evidence
+  add_fact          id, validity, text, trust, evidence
+  close_fact        id, match, end, evidence
+  correct           id, match, text, evidence
+  add_alias         id, alias, evidence
+  link              id, relation, target, evidence
+  set_prose         id, text, evidence
+  procedure_add     agent, text, evidence
+  decision_propose  name, text, evidence
+  observe           text, evidence
+  remove_fact       id, match, evidence
+  noop              {}
+validity is "since YYYY-MM", "until YYYY-MM-DD", or a bare date; trust is
+stated, observed, inferred:<0-1>, or external; evidence is the verbatim quote
+from the cited item; match is the opening of the existing fact line; id names a
+record from candidate_records. Every entry of ops is an object whose first key
+is the op name.
+Output: {"ops": [...], "summary": "one line"}.
+Example: {"ops": [{"op": "add_fact", "id": "pers-june", "validity": "since 2026-09",
+"text": "PM for Lighthouse", "trust": "stated", "evidence": "june runs lighthouse now",
+"sources": ["inbox:abc123"]}], "summary": "recorded June's role"}"""
 
 
 def model_plan(store, batch: list[dict], candidates: dict, which: str) -> dict:
